@@ -1,0 +1,8 @@
+{
+  "Isolation_Forest": 244,
+  "Random_Forest": 159,
+  "LSTM": 99,
+  "CNN_LSTM": 101,
+  "LSTM_Autoencoder": 225,
+  "Transformer": 97
+}

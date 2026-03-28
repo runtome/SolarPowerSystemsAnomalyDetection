@@ -1,0 +1,267 @@
+  Log file: logs\exp_8step_20260328_150218_in8_out3_all.log
+============================================================
+  Solar Power Anomaly Detection Pipeline
+============================================================
+  Trial name:   exp_8step
+  Device:       cuda
+  GPU:          NVIDIA GeForce RTX 3060 Ti
+  Input steps:  8 (120 min)
+  Output steps: 3 (45 min)
+  Models (ML):  ['Isolation_Forest', 'Random_Forest']
+  Models (DL):  ['LSTM', 'CNN_LSTM', 'LSTM_Autoencoder', 'Transformer']
+  Epochs:       100
+  Batch size:   32
+  Sigma:        3.0
+  Output dir:   outputs\exp_8step
+============================================================
+
+[1/6] Running EDA & data cleaning...
+
+============================================================
+  EDA Pipeline - site_1
+============================================================
+  Data dir:    datasets\site_1
+  EDA output:  outputs\exp_8step\data_EDA\site_1
+  Cleaned CSV: datasets\site_1_cleaned.csv
+
+============================================================
+  Raw Data Summary
+============================================================
+
+  temperature_c (Temp-Ambient_340_20250601_20251201.csv):
+    Rows: 26,195
+    Range: 2025-06-01 01:03:15 to 2025-12-01 23:59:16
+    Nulls: 0 (0.00%)
+    Median interval: 0 days 00:01:00
+    Max gap: 5 days 20:02:39
+    Gaps > 2x median: 3250
+
+  irradiance_wm2 (Irradiance_339_20250601_20251201.csv):
+    Rows: 26,177
+    Range: 2025-06-01 01:03:15 to 2025-12-01 23:59:16
+    Nulls: 0 (0.00%)
+    Median interval: 0 days 00:01:00
+    Max gap: 5 days 20:02:40
+    Gaps > 2x median: 3282
+
+  load_kw (load_338_20250601_20251201.csv):
+    Rows: 17,367
+    Range: 2025-06-01 00:00:00 to 2025-12-01 23:45:00
+    Nulls: 0 (0.00%)
+    Median interval: 0 days 00:15:00
+    Max gap: 2 days 18:45:00
+    Gaps > 2x median: 5
+
+  generation_kw (gen_337_20250601_20251201.csv):
+    Rows: 26,226
+    Range: 2025-06-01 01:03:15 to 2025-12-01 23:59:16
+    Nulls: 0 (0.00%)
+    Median interval: 0 days 00:01:00
+    Max gap: 5 days 20:02:40
+    Gaps > 2x median: 3254
+
+============================================================
+  Merge & Cleaning Summary
+============================================================
+
+  After merge (before cleaning): 17,664 rows
+  Nulls per column:
+    temperature_c       :  13260 (75.07%)
+    irradiance_wm2      :  13257 (75.05%)
+    load_kw             :    301 (1.70%)
+    generation_kw       :  13250 (75.01%)
+
+  After cleaning: 15,013 rows
+  Dropped: 2,651 rows
+  Remaining nulls per column:
+    temperature_c       : 0
+    irradiance_wm2      : 0
+    load_kw             : 0
+    generation_kw       : 0
+
+============================================================
+  Basic Statistics
+============================================================
+       temperature_c  irradiance_wm2   load_kw  generation_kw
+count       15013.00        15013.00  15013.00       15013.00
+mean           28.73          157.76    737.19          96.53
+std             3.01          243.96    417.73         150.86
+min             0.00            0.00      0.00           0.00
+25%            26.96            0.00    408.00           0.00
+50%            28.54            0.00    755.00           2.00
+75%            30.60          259.62   1090.00         159.00
+max            37.05         1073.00   1810.00         638.00
+
+============================================================
+  Correlation with generation_kw
+============================================================
+    generation_kw       : 1.0000
+    irradiance_wm2      : 0.9010
+    temperature_c       : 0.5642
+    load_kw             : 0.0260
+
+============================================================
+  Anomaly Indicators (Visual Inspection)
+============================================================
+  High irradiance but low generation: 0 samples
+  Generation with no sunlight: 1655 samples
+
+============================================================
+  Net Power (Generation - Load)
+============================================================
+  Surplus periods: 10.8%
+  Deficit periods: 89.2%
+
+  Generating EDA plots -> outputs\exp_8step\data_EDA\site_1
+    saved: missing_data_pattern.png
+    saved: before_after_cleaning.png
+    saved: time_series.png
+    saved: one_week_detail.png
+    saved: distributions.png
+    saved: boxplots.png
+    saved: correlation_matrix.png
+    saved: scatter_vs_generation.png
+    saved: hourly_patterns.png
+    saved: monthly_trends.png
+
+  Daytime samples (irradiance > 10): 6519
+  Efficiency stats:
+    Mean:   0.7131
+    Std:    0.3080
+    Median: 0.7292
+    saved: efficiency_analysis.png
+    saved: anomaly_indicators.png
+    saved: net_power.png
+
+  Saved cleaned data: (15013, 4) -> datasets\site_1_cleaned.csv
+  Columns: ['temperature_c', 'irradiance_wm2', 'load_kw', 'generation_kw']
+
+[2/6] Loading and preparing data...
+  Data loaded: 15013 rows
+  Train: 10509 | Test: 4504
+  Sequence config: input=8 -> output=3
+  X_train: (10499, 8, 3) | Y_train: (10499, 3, 3)
+  X_test:  (4494, 8, 3)  | Y_test:  (4494, 3, 3)
+  X_train_ae: (10502, 8, 3) | X_test_ae: (4497, 8, 3)
+
+[3/6] Training ML models...
+
+============================================================
+  Training: Isolation_Forest
+============================================================
+  Anomalies: 244 (5.4%)
+
+============================================================
+  Training: Random_Forest
+============================================================
+  Random_Forest        | RMSE:  83.3744 | MAE:  34.8012 | R2: 0.6346
+  Feature importance: {'irradiance_wm2': np.float64(0.9458212890898194), 'temperature_c': np.float64(0.05417871091018052)}
+  Anomalies: 159 (3.5%)
+
+[4/6] Training DL models...
+
+============================================================
+  Training: LSTM
+  Params: 55,689
+============================================================
+  Epoch   1/100 | Train: 0.034661 | Val: 0.009356 | LR: 0.001000
+  Epoch  10/100 | Train: 0.006076 | Val: 0.006476 | LR: 0.001000
+  Epoch  20/100 | Train: 0.004676 | Val: 0.006494 | LR: 0.001000
+  Epoch  30/100 | Train: 0.004391 | Val: 0.006106 | LR: 0.001000
+  Epoch  40/100 | Train: 0.004139 | Val: 0.005903 | LR: 0.001000
+  Epoch  50/100 | Train: 0.004070 | Val: 0.006110 | LR: 0.001000
+  Epoch  60/100 | Train: 0.003857 | Val: 0.005661 | LR: 0.000500
+  Epoch  70/100 | Train: 0.003839 | Val: 0.005667 | LR: 0.000250
+  Epoch  80/100 | Train: 0.003741 | Val: 0.005630 | LR: 0.000250
+  Epoch  90/100 | Train: 0.003625 | Val: 0.005573 | LR: 0.000125
+  Epoch 100/100 | Train: 0.003576 | Val: 0.005503 | LR: 0.000031
+  Best val loss: 0.005468
+  Model saved: outputs\exp_8step\LSTM\model\LSTM.pt
+  LSTM                 | RMSE:  39.5547 | MAE:  20.1198 | R2: 0.9150
+  Anomalies: 100 (2.2%)
+
+============================================================
+  Training: CNN_LSTM
+  Params: 10,361
+============================================================
+  Epoch   1/100 | Train: 0.042180 | Val: 0.009374 | LR: 0.001000
+  Epoch  10/100 | Train: 0.005811 | Val: 0.006435 | LR: 0.001000
+  Epoch  20/100 | Train: 0.004584 | Val: 0.006671 | LR: 0.001000
+  Epoch  30/100 | Train: 0.004234 | Val: 0.005887 | LR: 0.000500
+  Epoch  40/100 | Train: 0.004161 | Val: 0.005824 | LR: 0.000500
+  Epoch  50/100 | Train: 0.004006 | Val: 0.005818 | LR: 0.000250
+  Epoch  60/100 | Train: 0.004073 | Val: 0.005782 | LR: 0.000250
+  Epoch  70/100 | Train: 0.003948 | Val: 0.005622 | LR: 0.000250
+  Epoch  80/100 | Train: 0.003815 | Val: 0.005613 | LR: 0.000125
+  Epoch  90/100 | Train: 0.003890 | Val: 0.005559 | LR: 0.000063
+  Epoch 100/100 | Train: 0.003809 | Val: 0.005619 | LR: 0.000031
+  Best val loss: 0.005559
+  Model saved: outputs\exp_8step\CNN_LSTM\model\CNN_LSTM.pt
+  CNN_LSTM             | RMSE:  41.7953 | MAE:  21.2569 | R2: 0.9051
+  Anomalies: 105 (2.3%)
+
+============================================================
+  Training: LSTM_Autoencoder
+  Params: 16,611
+============================================================
+  Epoch   1/100 | Train: 0.042536 | Val: 0.007415 | LR: 0.001000
+  Epoch  10/100 | Train: 0.002100 | Val: 0.002162 | LR: 0.001000
+  Epoch  20/100 | Train: 0.001400 | Val: 0.001480 | LR: 0.001000
+  Epoch  30/100 | Train: 0.001066 | Val: 0.001233 | LR: 0.001000
+  Epoch  40/100 | Train: 0.000932 | Val: 0.001051 | LR: 0.001000
+  Epoch  50/100 | Train: 0.000794 | Val: 0.000819 | LR: 0.001000
+  Epoch  60/100 | Train: 0.000709 | Val: 0.000847 | LR: 0.001000
+  Epoch  70/100 | Train: 0.000653 | Val: 0.000669 | LR: 0.001000
+  Epoch  80/100 | Train: 0.000587 | Val: 0.000636 | LR: 0.000500
+  Epoch  90/100 | Train: 0.000569 | Val: 0.000612 | LR: 0.000500
+  Epoch 100/100 | Train: 0.000540 | Val: 0.000584 | LR: 0.000250
+  Best val loss: 0.000569
+  Model saved: outputs\exp_8step\LSTM_Autoencoder\model\LSTM_Autoencoder.pt
+  Anomalies: 215 (4.8%)
+
+============================================================
+  Training: Transformer
+  Params: 19,913
+============================================================
+  Epoch   1/100 | Train: 0.021177 | Val: 0.007880 | LR: 0.001000
+  Epoch  10/100 | Train: 0.005340 | Val: 0.006715 | LR: 0.001000
+  Epoch  20/100 | Train: 0.004412 | Val: 0.006349 | LR: 0.001000
+  Epoch  30/100 | Train: 0.003970 | Val: 0.005794 | LR: 0.000500
+  Epoch  40/100 | Train: 0.003935 | Val: 0.005994 | LR: 0.000500
+  Epoch  50/100 | Train: 0.003759 | Val: 0.005682 | LR: 0.000250
+  Epoch  60/100 | Train: 0.003617 | Val: 0.005590 | LR: 0.000125
+  Epoch  70/100 | Train: 0.003566 | Val: 0.005633 | LR: 0.000063
+  Epoch  80/100 | Train: 0.003549 | Val: 0.005577 | LR: 0.000031
+  Epoch  90/100 | Train: 0.003591 | Val: 0.005542 | LR: 0.000031
+  Epoch 100/100 | Train: 0.003492 | Val: 0.005500 | LR: 0.000016
+  Best val loss: 0.005500
+  Model saved: outputs\exp_8step\Transformer\model\Transformer.pt
+  Transformer          | RMSE:  39.4815 | MAE:  19.1924 | R2: 0.9153
+  Anomalies: 97 (2.2%)
+
+[5/6] Generating comparison plots...
+
+=== Model Comparison ===
+                  RMSE      MAE      R2
+model                                  
+Random_Forest  83.3744  34.8012  0.6346
+LSTM           39.5547  20.1198  0.9150
+CNN_LSTM       41.7953  21.2569  0.9051
+Transformer    39.4815  19.1924  0.9153
+
+=== Anomaly Counts ===
+  Isolation_Forest         : 244
+  Random_Forest            : 159
+  LSTM                     : 100
+  CNN_LSTM                 : 105
+  LSTM_Autoencoder         : 215
+  Transformer              : 97
+
+[6/6] Ensemble anomaly detection...
+  Ensemble anomalies (>=3 votes): 115
+  Vote distribution: {0: 3969, 1: 277, 2: 133, 3: 94, 4: 12, 5: 7, 6: 2}
+
+============================================================
+  Pipeline complete!
+  Results saved to: outputs\exp_8step/
+============================================================
