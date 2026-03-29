@@ -82,6 +82,15 @@ def clean_and_merge(raw: dict, resample: str = "15min",
     df_clean = df_clean.interpolate(method="time", limit=interp_limit)
     df_clean = df_clean.dropna()
 
+    # Physical constraint: no sunlight = no solar generation
+    if "irradiance_wm2" in df_clean.columns and "generation_kw" in df_clean.columns:
+        mask = (df_clean["irradiance_wm2"] <= 0) & (df_clean["generation_kw"] > 0)
+        n_zeroed = mask.sum()
+        df_clean.loc[mask, "generation_kw"] = 0.0
+        if n_zeroed > 0:
+            print(f"  Zeroed {n_zeroed} generation readings with no sunlight "
+                  f"(standby/sensor noise)")
+
     return df_merged, df_clean
 
 
