@@ -124,7 +124,17 @@ class PathConfig:
         return p
 
 
+@dataclass
+class TimesFMConfig:
+    """TimesFM foundation model settings."""
+    model_id: str = "google/timesfm-2.5-200m-pytorch"
+    max_horizon: int = 512       # forecast chunk size (multiple of 128)
+    context_length: int = 512    # trailing context per chunk
+    use_covariates: bool = True  # try xreg, fallback to univariate
+
+
 # --- All available model names ---
 DL_MODELS = ["LSTM", "CNN_LSTM", "LSTM_Autoencoder", "Transformer"]
 ML_MODELS = ["Isolation_Forest", "Random_Forest"]
-ALL_MODELS = ML_MODELS + DL_MODELS
+FOUNDATION_MODELS = ["TimesFM"]
+ALL_MODELS = ML_MODELS + DL_MODELS + FOUNDATION_MODELS

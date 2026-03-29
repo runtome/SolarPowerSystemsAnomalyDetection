@@ -96,7 +96,8 @@ def setup_logging(args, trial_name: str):
 
 from src.config import (
     DataConfig, SequenceConfig, TrainConfig, ModelConfig,
-    AnomalyConfig, PathConfig, DL_MODELS, ML_MODELS, ALL_MODELS,
+    AnomalyConfig, PathConfig, TimesFMConfig,
+    DL_MODELS, ML_MODELS, FOUNDATION_MODELS, ALL_MODELS,
 )
 from src.data import SolarDataModule
 from src.models import LSTMModel, CNNLSTM, LSTMAutoencoder, TransformerModel
@@ -381,6 +382,51 @@ def run_dl_models(model_names: list, data_mod: SolarDataModule,
     return results, anomaly_store
 
 
+def run_timesfm_model(data_mod: SolarDataModule, tfm_cfg: TimesFMConfig,
+                      data_cfg: DataConfig, anomaly_cfg: AnomalyConfig,
+                      path_cfg: PathConfig):
+    """Run TimesFM foundation model: forecast, detect anomalies, classify, plot."""
+    from src.models.timesfm_wrapper import is_timesfm_available, forecast_test_period
+
+    if not is_timesfm_available():
+        print("  [SKIP] timesfm not installed. Install with: pip install timesfm")
+        return [], {}
+
+    name = "TimesFM"
+    print(f"\n{'='*60}\n  Running: {name} (pretrained foundation model)\n{'='*60}")
+
+    # Forecast
+    actual, predicted = forecast_test_period(
+        data_mod.train_df, data_mod.test_df, tfm_cfg, data_cfg,
+    )
+
+    # Evaluate
+    result = evaluate_model(actual, predicted, name)
+
+    # Anomaly detection (3-sigma on MAE)
+    mae, threshold, anomalies = detect_anomalies_3sigma(
+        actual, predicted, anomaly_cfg.sigma,
+    )
+    n_anom = anomalies.sum()
+    print(f"  Anomalies: {n_anom} ({n_anom/len(anomalies)*100:.1f}%)")
+
+    # Classify anomalies into 5 categories
+    timestamps = data_mod.test_df.index
+    cats = classify_anomalies(anomalies, timestamps, data_mod.test_df)
+    print_category_counts(cats, name)
+
+    # Plots
+    pdir = path_cfg.plots_dir(name)
+    plot_anomalies(timestamps, actual, predicted, anomalies,
+                   name, threshold, pdir / "anomaly_detection.png",
+                   categories=cats)
+    plot_prediction_vs_actual(timestamps, actual, predicted,
+                              name, pdir / "prediction_vs_actual.png")
+    plot_error_distribution(mae, threshold, name, pdir / "error_distribution.png")
+
+    return [result], {name: anomalies}
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Solar Power Anomaly Detection Training Pipeline",
@@ -400,7 +446,7 @@ Examples:
                         help="Number of output timesteps to predict (default: 1 = 15min)")
     parser.add_argument("--models", nargs="+", default=["all"],
                         help="Models to train: all, LSTM, CNN_LSTM, LSTM_Autoencoder, "
-                             "Transformer, Isolation_Forest, Random_Forest")
+                             "Transformer, Isolation_Forest, Random_Forest, TimesFM")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.001)
@@ -425,9 +471,11 @@ Examples:
     if "all" in args.models:
         ml_to_run = ML_MODELS[:]
         dl_to_run = DL_MODELS[:]
+        fm_to_run = FOUNDATION_MODELS[:]
     else:
         ml_to_run = [m for m in args.models if m in ML_MODELS]
         dl_to_run = [m for m in args.models if m in DL_MODELS]
+        fm_to_run = [m for m in args.models if m in FOUNDATION_MODELS]
         unknown = [m for m in args.models if m not in ALL_MODELS]
         if unknown:
             print(f"Unknown models: {unknown}")
@@ -462,6 +510,7 @@ Examples:
     print(f"  Output steps: {seq_cfg.output_steps} ({seq_cfg.output_steps * 15} min)")
     print(f"  Models (ML):  {ml_to_run}")
     print(f"  Models (DL):  {dl_to_run}")
+    print(f"  Models (FM):  {fm_to_run}")
     print(f"  Epochs:       {train_cfg.epochs}")
     print(f"  Batch size:   {train_cfg.batch_size}")
     print(f"  Sigma:        {anomaly_cfg.sigma}")
@@ -469,11 +518,11 @@ Examples:
     print("=" * 60)
 
     # --- EDA & Data Cleaning ---
-    print("\n[1/6] Running EDA & data cleaning...")
+    print("\n[1/7] Running EDA & data cleaning...")
     run_eda(args.data_dir, args.output_dir)
 
     # --- Load Data ---
-    print("\n[2/6] Loading and preparing data...")
+    print("\n[2/7] Loading and preparing data...")
     data_mod = SolarDataModule(data_cfg, seq_cfg, device)
     data_mod.setup()
 
@@ -506,7 +555,7 @@ Examples:
     all_anomalies = {}
 
     if ml_to_run:
-        print("\n[3/6] Training ML models...")
+        print("\n[3/7] Training ML models...")
         ml_results, ml_anomalies = run_ml_models(
             data_mod, model_cfg, anomaly_cfg, path_cfg
         )
@@ -515,7 +564,7 @@ Examples:
 
     # --- Train DL Models ---
     if dl_to_run:
-        print("\n[4/6] Training DL models...")
+        print("\n[4/7] Training DL models...")
         dl_results, dl_anomalies = run_dl_models(
             dl_to_run, data_mod, seq_cfg, train_cfg,
             model_cfg, anomaly_cfg, path_cfg, device,
@@ -523,8 +572,18 @@ Examples:
         all_results.extend(dl_results)
         all_anomalies.update(dl_anomalies)
 
+    # --- Foundation Models ---
+    if fm_to_run:
+        print("\n[5/7] Running foundation models...")
+        tfm_cfg = TimesFMConfig()
+        fm_results, fm_anomalies = run_timesfm_model(
+            data_mod, tfm_cfg, data_cfg, anomaly_cfg, path_cfg,
+        )
+        all_results.extend(fm_results)
+        all_anomalies.update(fm_anomalies)
+
     # --- Comparison ---
-    print("\n[5/6] Generating comparison plots...")
+    print("\n[6/7] Generating comparison plots...")
 
     if all_results:
         results_df = build_results_table(all_results)
@@ -545,7 +604,7 @@ Examples:
 
     # --- Ensemble ---
     if len(all_anomalies) >= 2:
-        print("\n[6/6] Ensemble anomaly detection...")
+        print("\n[7/7] Ensemble anomaly detection...")
 
         votes, ensemble, distribution = ensemble_voting(
             all_anomalies, anomaly_cfg.ensemble_min_votes
