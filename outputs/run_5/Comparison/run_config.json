@@ -1,0 +1,15 @@
+{
+  "trial_name": "run_5",
+  "input_steps": 4,
+  "output_steps": 1,
+  "features": [
+    "irradiance_wm2",
+    "temperature_c"
+  ],
+  "target": "generation_kw",
+  "train_ratio": 0.7,
+  "sigma": 3.0,
+  "epochs": 100,
+  "batch_size": 32,
+  "lr": 0.001
+}

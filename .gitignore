@@ -1,5 +1,7 @@
 datasets/
 References/
+outputs/run_2/
+outputs/run_4/
 __pycache__/
 *.pyc
 ~$*

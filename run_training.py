@@ -106,7 +106,7 @@ from src.models.ml_models import (
 from src.trainer import train_model, predict
 from src.evaluate import (
     evaluate_model, detect_anomalies_3sigma, detect_anomalies_reconstruction,
-    ensemble_voting, build_results_table,
+    ensemble_voting, build_results_table, classify_anomalies,
 )
 from src.eda import run_eda
 from src.visualize import (
@@ -115,6 +115,17 @@ from src.visualize import (
     plot_autoencoder_results, plot_model_comparison, plot_anomaly_comparison,
     plot_ensemble,
 )
+
+
+def print_category_counts(categories: dict, model_name: str):
+    """Print anomaly category breakdown for a model."""
+    counts = {name: int(mask.sum()) for name, mask in categories.items()}
+    total = sum(counts.values())
+    print(f"  Anomaly Categories ({total} total):")
+    for name, count in counts.items():
+        if count > 0:
+            print(f"    {name:25s}: {count}")
+    return counts
 
 
 def build_dl_model(name: str, n_features: int, seq_cfg: SequenceConfig,
@@ -177,12 +188,19 @@ def run_ml_models(data_mod: SolarDataModule, model_cfg: ModelConfig,
     joblib.dump(iso_model, path_cfg.model_dir(name) / f"{name}.joblib")
     print(f"  Anomalies: {iso_anomalies.sum()} ({iso_anomalies.sum()/len(iso_anomalies)*100:.1f}%)")
 
+    # Classify anomalies into categories
+    iso_cats = classify_anomalies(
+        iso_anomalies, data_mod.test_df.index, data_mod.test_df
+    )
+    print_category_counts(iso_cats, name)
+
     # Plot
     plot_isolation_forest(
         data_mod.test_df.index,
         data_mod.test_df[data_mod.data_cfg.target].values,
         iso_anomalies, iso_scores, name,
         path_cfg.plots_dir(name) / "anomaly_detection.png",
+        categories=iso_cats,
     )
     anomaly_store[name] = iso_anomalies
 
@@ -216,10 +234,17 @@ def run_ml_models(data_mod: SolarDataModule, model_cfg: ModelConfig,
     )
     print(f"  Anomalies: {rf_anomalies.sum()} ({rf_anomalies.sum()/len(rf_anomalies)*100:.1f}%)")
 
+    # Classify anomalies into categories
+    rf_cats = classify_anomalies(
+        rf_anomalies, data_mod.test_df.index, data_mod.test_df
+    )
+    print_category_counts(rf_cats, name)
+
     # Plots
     pdir = path_cfg.plots_dir(name)
     plot_anomalies(data_mod.test_df.index, y_test, rf_preds,
-                   rf_anomalies, name, rf_thresh, pdir / "anomaly_detection.png")
+                   rf_anomalies, name, rf_thresh, pdir / "anomaly_detection.png",
+                   categories=rf_cats)
     plot_prediction_vs_actual(data_mod.test_df.index, y_test, rf_preds,
                               name, pdir / "prediction_vs_actual.png")
     plot_error_distribution(rf_mae, rf_thresh, name, pdir / "error_distribution.png")
@@ -279,10 +304,17 @@ def run_dl_models(model_names: list, data_mod: SolarDataModule,
             n = min(len(ae_timestamps), len(recon_error))
             y_actual_ae = data_mod.test_df[data_mod.data_cfg.target].values[seq_cfg.input_steps:]
 
+            # Classify anomalies into categories
+            ae_cats = classify_anomalies(
+                anomalies[:n], ae_timestamps[:n], data_mod.test_df
+            )
+            print_category_counts(ae_cats, name)
+
             pdir = path_cfg.plots_dir(name)
             plot_autoencoder_results(
                 ae_timestamps[:n], y_actual_ae[:n], recon_error[:n], anomalies[:n],
                 threshold, name, pdir / "anomaly_detection.png",
+                categories=ae_cats,
             )
             plot_error_distribution(recon_error, threshold, name,
                                     pdir / "reconstruction_error_dist.png")
@@ -329,11 +361,16 @@ def run_dl_models(model_names: list, data_mod: SolarDataModule,
             n_anom = anomalies.sum()
             print(f"  Anomalies: {n_anom} ({n_anom/len(anomalies)*100:.1f}%)")
 
-            # Plots
+            # Classify anomalies into categories
             ts = data_mod.test_timestamps
+            cats = classify_anomalies(anomalies, ts, data_mod.test_df)
+            print_category_counts(cats, name)
+
+            # Plots
             pdir = path_cfg.plots_dir(name)
             plot_anomalies(ts, y_act_1d, pred_1d, anomalies,
-                          name, threshold, pdir / "anomaly_detection.png")
+                          name, threshold, pdir / "anomaly_detection.png",
+                          categories=cats)
             plot_prediction_vs_actual(ts, y_act_1d, pred_1d,
                                       name, pdir / "prediction_vs_actual.png")
             plot_error_distribution(mae, threshold, name,
@@ -527,15 +564,23 @@ Examples:
             ts = data_mod.test_df.index[:n]
             y_act_1d = data_mod.test_df[data_cfg.target].values[:n]
 
+        # Classify ensemble anomalies into categories
+        ens_cats = classify_anomalies(ensemble, ts, data_mod.test_df)
+
+        # Print category breakdown
+        ens_cat_counts = print_category_counts(ens_cats, "Ensemble")
+
         ens_dir = path_cfg.ensemble_dir()
         plot_ensemble(ts, y_act_1d, votes, ensemble,
-                      anomaly_cfg.ensemble_min_votes, ens_dir / "ensemble_anomalies.png")
+                      anomaly_cfg.ensemble_min_votes, ens_dir / "ensemble_anomalies.png",
+                      categories=ens_cats)
 
         with open(ens_dir / "ensemble_results.json", "w") as f:
             json.dump({
                 "total_anomalies": int(ensemble.sum()),
                 "min_votes": anomaly_cfg.ensemble_min_votes,
                 "vote_distribution": distribution,
+                "category_counts": ens_cat_counts,
             }, f, indent=2)
 
     print("\n" + "=" * 60)

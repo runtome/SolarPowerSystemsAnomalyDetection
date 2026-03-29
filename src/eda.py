@@ -82,16 +82,28 @@ def clean_and_merge(raw: dict, resample: str = "15min",
     df_clean = df_clean.interpolate(method="time", limit=interp_limit)
     df_clean = df_clean.dropna()
 
-    # Physical constraint: no sunlight = no solar generation
-    if "irradiance_wm2" in df_clean.columns and "generation_kw" in df_clean.columns:
-        mask = (df_clean["irradiance_wm2"] <= 0) & (df_clean["generation_kw"] > 0)
+    return df_merged, df_clean
+
+
+def detect_no_sun_generation(df: pd.DataFrame) -> pd.DataFrame:
+    """Detect rows where generation > 0 but irradiance <= 0 (before cleaning)."""
+    if "irradiance_wm2" in df.columns and "generation_kw" in df.columns:
+        mask = (df["irradiance_wm2"] <= 0) & (df["generation_kw"] > 0)
+        return df[mask].copy()
+    return pd.DataFrame()
+
+
+def zero_no_sun_generation(df: pd.DataFrame) -> pd.DataFrame:
+    """Physical constraint: no sunlight = no solar generation."""
+    df = df.copy()
+    if "irradiance_wm2" in df.columns and "generation_kw" in df.columns:
+        mask = (df["irradiance_wm2"] <= 0) & (df["generation_kw"] > 0)
         n_zeroed = mask.sum()
-        df_clean.loc[mask, "generation_kw"] = 0.0
+        df.loc[mask, "generation_kw"] = 0.0
         if n_zeroed > 0:
             print(f"  Zeroed {n_zeroed} generation readings with no sunlight "
                   f"(standby/sensor noise)")
-
-    return df_merged, df_clean
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -159,26 +171,97 @@ def print_correlation(df_clean: pd.DataFrame):
             print(f"    {k:20s}: {v:.4f}")
 
 
-def print_anomaly_indicators(df_clean: pd.DataFrame):
-    """Print visual anomaly indicators."""
+def detect_anomaly_categories(df: pd.DataFrame, gen_no_sun: pd.DataFrame) -> dict:
+    """Detect 5 categories of anomalies for EDA visualization.
+
+    Categories:
+        1. High irradiance, low generation - potential panel degradation/shading
+        2. Sudden generation drop - abrupt drop between consecutive timesteps
+        3. Gradual efficiency decline - rolling efficiency trend drops
+        4. Unusual generation spikes - generation far above normal for given irradiance
+        5. Generation with zero irradiance - sensor/logging error (pre-cleaning snapshot)
+
+    Returns dict of {category_name: DataFrame}.
+    """
+    has_irr = "irradiance_wm2" in df.columns
+    has_gen = "generation_kw" in df.columns
+    anomalies = {}
+
+    if not (has_irr and has_gen):
+        return anomalies
+
+    # 1. High irradiance but low generation (daytime context)
+    #    Use daytime-only percentiles so the threshold is meaningful
+    daytime_all = df[df["irradiance_wm2"] > 50]
+    if len(daytime_all) > 0:
+        irr_q75 = daytime_all["irradiance_wm2"].quantile(0.75)
+        gen_q10 = daytime_all["generation_kw"].quantile(0.10)
+        anomalies["High Irr / Low Gen"] = df[
+            (df["irradiance_wm2"] > irr_q75) &
+            (df["generation_kw"] < gen_q10)
+        ]
+    else:
+        anomalies["High Irr / Low Gen"] = pd.DataFrame()
+
+    # 2. Sudden generation drop (consecutive daytime steps only)
+    #    Large negative change between 15-min consecutive intervals
+    daytime = df[df["irradiance_wm2"] > 50].copy()
+    if len(daytime) > 4:
+        time_diff = daytime.index.to_series().diff()
+        consecutive = time_diff <= pd.Timedelta(minutes=20)
+        gen_diff = daytime["generation_kw"].diff()
+        # Drop > 50% of current generation in one step
+        pct_drop = gen_diff / daytime["generation_kw"].shift(1)
+        drop_mask = consecutive & (pct_drop < -0.5) & (gen_diff.abs() > 50)
+        anomalies["Sudden Drop"] = daytime[drop_mask.fillna(False)]
+    else:
+        anomalies["Sudden Drop"] = pd.DataFrame()
+
+    # 3. Gradual efficiency decline
+    #    Daytime efficiency (gen/irr) drops below rolling mean - 2*std
+    daytime_eff = df[df["irradiance_wm2"] > 50].copy()
+    if len(daytime_eff) > 20:
+        daytime_eff["efficiency"] = (
+            daytime_eff["generation_kw"] / daytime_eff["irradiance_wm2"]
+        )
+        roll_mean = daytime_eff["efficiency"].rolling(96, min_periods=20).mean()
+        roll_std = daytime_eff["efficiency"].rolling(96, min_periods=20).std()
+        decline_mask = daytime_eff["efficiency"] < (roll_mean - 2 * roll_std)
+        anomalies["Efficiency Decline"] = daytime_eff[decline_mask.fillna(False)]
+    else:
+        anomalies["Efficiency Decline"] = pd.DataFrame()
+
+    # 4. Unusual generation spikes
+    #    Generation far above expected for given irradiance bin
+    daytime_sp = df[df["irradiance_wm2"] > 50].copy()
+    if len(daytime_sp) > 20:
+        daytime_sp["irr_bin"] = pd.qcut(
+            daytime_sp["irradiance_wm2"], q=10, duplicates="drop"
+        )
+        bin_stats = daytime_sp.groupby("irr_bin", observed=True)["generation_kw"].agg(
+            ["mean", "std"]
+        )
+        daytime_sp = daytime_sp.join(bin_stats, on="irr_bin", rsuffix="_bin")
+        spike_mask = daytime_sp["generation_kw"] > (
+            daytime_sp["mean"] + 3 * daytime_sp["std"]
+        )
+        anomalies["Gen Spike"] = daytime_sp[spike_mask.fillna(False)]
+    else:
+        anomalies["Gen Spike"] = pd.DataFrame()
+
+    # 5. Generation with zero irradiance (pre-cleaning snapshot)
+    anomalies["Gen / Zero Irr"] = gen_no_sun
+
+    return anomalies
+
+
+def print_anomaly_indicators(anomalies: dict):
+    """Print anomaly category counts."""
     print("\n" + "=" * 60)
     print("  Anomaly Indicators (Visual Inspection)")
     print("=" * 60)
-
-    if "irradiance_wm2" in df_clean.columns and "generation_kw" in df_clean.columns:
-        high_irr_low_gen = df_clean[
-            (df_clean["irradiance_wm2"] > df_clean["irradiance_wm2"].quantile(0.75)) &
-            (df_clean["generation_kw"] < df_clean["generation_kw"].quantile(0.10))
-        ]
-        gen_no_sun = df_clean[
-            (df_clean["irradiance_wm2"] <= 0) &
-            (df_clean["generation_kw"] > 1)
-        ]
-        print(f"  High irradiance but low generation: {len(high_irr_low_gen)} samples")
-        print(f"  Generation with no sunlight: {len(gen_no_sun)} samples")
-        return high_irr_low_gen, gen_no_sun
-
-    return pd.DataFrame(), pd.DataFrame()
+    for name, adf in anomalies.items():
+        print(f"    {name:30s}: {len(adf):,} samples")
 
 
 def print_net_power(df_clean: pd.DataFrame):
@@ -493,25 +576,42 @@ def plot_efficiency(df_clean: pd.DataFrame, save_path: Path):
     print(f"    Median: {daytime['efficiency'].median():.4f}")
 
 
-def plot_anomaly_indicators(df_clean: pd.DataFrame, high_irr_low_gen: pd.DataFrame,
-                             gen_no_sun: pd.DataFrame, save_path: Path):
-    """Scatter plot highlighting potential anomaly points."""
+def plot_anomaly_indicators(df_clean: pd.DataFrame, anomalies: dict,
+                             save_path: Path):
+    """Scatter plot highlighting 5 anomaly categories with distinct colors."""
     if "irradiance_wm2" not in df_clean.columns or "generation_kw" not in df_clean.columns:
         return
 
-    fig, ax = plt.subplots(figsize=(14, 5))
+    CATEGORY_STYLE = {
+        "High Irr / Low Gen":   {"color": "red",       "marker": "o"},
+        "Sudden Drop":          {"color": "magenta",    "marker": "v"},
+        "Efficiency Decline":   {"color": "orange",     "marker": "s"},
+        "Gen Spike":            {"color": "lime",       "marker": "^"},
+        "Gen / Zero Irr":       {"color": "dodgerblue", "marker": "D"},
+    }
+
+    fig, ax = plt.subplots(figsize=(16, 7))
+
+    # Background: all normal points
     ax.scatter(df_clean["irradiance_wm2"], df_clean["generation_kw"],
                alpha=0.05, s=1, color="gray", label="Normal")
-    if len(high_irr_low_gen) > 0:
-        ax.scatter(high_irr_low_gen["irradiance_wm2"], high_irr_low_gen["generation_kw"],
-                   alpha=0.5, s=10, color="red", label="High Irr / Low Gen")
-    if len(gen_no_sun) > 0:
-        ax.scatter(gen_no_sun["irradiance_wm2"], gen_no_sun["generation_kw"],
-                   alpha=0.5, s=10, color="blue", label="Gen with No Sun")
+
+    # Overlay each anomaly category
+    for name, adf in anomalies.items():
+        if len(adf) == 0:
+            continue
+        style = CATEGORY_STYLE.get(name, {"color": "black", "marker": "x"})
+        ax.scatter(
+            adf["irradiance_wm2"], adf["generation_kw"],
+            alpha=0.6, s=18, edgecolors="black", linewidths=0.3,
+            color=style["color"], marker=style["marker"],
+            label=f"{name} ({len(adf):,})",
+        )
+
     ax.set_xlabel("Irradiance (W/m²)")
     ax.set_ylabel("Generation (kW)")
-    ax.set_title("Potential Anomaly Points")
-    ax.legend()
+    ax.set_title("Potential Anomaly Points by Category")
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
@@ -576,12 +676,19 @@ def run_eda(data_dir: str, output_base: str = "outputs") -> tuple:
     df_merged, df_clean = clean_and_merge(raw)
     print_merge_summary(df_merged, df_clean)
 
+    # --- Detect anomalies BEFORE zeroing (for visualization) ---
+    gen_no_sun = detect_no_sun_generation(df_clean)
+
+    # --- Zero out no-sun generation (physical constraint) ---
+    df_clean = zero_no_sun_generation(df_clean)
+
     # --- Statistics ---
     print_statistics(df_clean)
     print_correlation(df_clean)
 
-    # --- Anomaly indicators ---
-    high_irr_low_gen, gen_no_sun = print_anomaly_indicators(df_clean)
+    # --- Anomaly indicators (5 categories) ---
+    anomalies = detect_anomaly_categories(df_clean, gen_no_sun)
+    print_anomaly_indicators(anomalies)
     print_net_power(df_clean)
 
     # --- Plots ---
@@ -620,7 +727,7 @@ def run_eda(data_dir: str, output_base: str = "outputs") -> tuple:
     plot_efficiency(df_clean, eda_dir / "efficiency_analysis.png")
     print("    saved: efficiency_analysis.png")
 
-    plot_anomaly_indicators(df_clean, high_irr_low_gen, gen_no_sun,
+    plot_anomaly_indicators(df_clean, anomalies,
                             eda_dir / "anomaly_indicators.png")
     print("    saved: anomaly_indicators.png")
 

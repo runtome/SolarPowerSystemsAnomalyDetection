@@ -13,6 +13,30 @@ plt.style.use("seaborn-v0_8-whitegrid")
 plt.rcParams["figure.figsize"] = (14, 5)
 plt.rcParams["font.size"] = 12
 
+# Consistent anomaly category styles across all plots
+ANOMALY_STYLES = {
+    "High Irr / Low Gen":   {"color": "red",       "marker": "o"},
+    "Sudden Drop":          {"color": "magenta",    "marker": "v"},
+    "Efficiency Decline":   {"color": "orange",     "marker": "s"},
+    "Gen Spike":            {"color": "lime",       "marker": "^"},
+    "Gen / Zero Irr":       {"color": "dodgerblue", "marker": "D"},
+}
+
+
+def _scatter_categories(ax, timestamps, values, categories, s=20):
+    """Overlay anomaly scatter points colored by category onto an axes."""
+    for cat_name, cat_mask in categories.items():
+        if cat_mask.sum() == 0:
+            continue
+        style = ANOMALY_STYLES.get(cat_name, {"color": "black", "marker": "x"})
+        ax.scatter(
+            timestamps[cat_mask], values[cat_mask],
+            color=style["color"], marker=style["marker"],
+            s=s, edgecolors="black", linewidths=0.3,
+            alpha=0.7, zorder=5,
+            label=f"{cat_name} ({cat_mask.sum()})",
+        )
+
 
 def plot_train_test_split(train_df, test_df, target_col: str, save_path: Path):
     fig, ax = plt.subplots(figsize=(16, 4))
@@ -68,57 +92,110 @@ def plot_error_distribution(mae, threshold, model_name: str, save_path: Path):
 
 
 def plot_anomalies(timestamps, actual, predicted, anomaly_mask,
-                   model_name: str, threshold: float, save_path: Path):
-    """Full 3-panel anomaly plot: pred vs actual, MAE+threshold, anomaly markers."""
+                   model_name: str, threshold: float, save_path: Path,
+                   categories: dict = None):
+    """Full 3-panel anomaly plot: pred vs actual, MAE+threshold, anomaly markers.
+
+    Saves combined 3-panel plot + 3 individual panel plots in the same directory.
+    """
     n = min(len(timestamps), len(actual), len(predicted))
     ts = timestamps[:n]
     act = actual[:n]
     pred = predicted[:n]
     mask = anomaly_mask[:n]
+    mae = np.abs(act - pred)
+    plot_dir = save_path.parent
 
+    # --- Combined 3-panel plot (anomaly_detection.png) ---
     fig, axes = plt.subplots(3, 1, figsize=(16, 12))
 
-    # Panel 1: Actual vs Predicted
     axes[0].plot(ts, act, "r-", lw=0.5, alpha=0.7, label="Actual")
     axes[0].plot(ts, pred, "b-", lw=0.5, alpha=0.7, label="Predicted")
     axes[0].set_title(f"{model_name} - Actual vs Predicted")
     axes[0].set_ylabel("Generation (kW)")
     axes[0].legend()
 
-    # Panel 2: MAE with threshold
-    mae = np.abs(act - pred)
     axes[1].plot(ts, mae, color="gray", lw=0.5)
     axes[1].axhline(threshold, color="red", ls="--", label=f"Threshold={threshold:.2f}")
     axes[1].set_title(f"{model_name} - Prediction Error")
     axes[1].set_ylabel("MAE")
     axes[1].legend()
 
-    # Panel 3: Anomalies marked
     axes[2].plot(ts, act, color="gray", lw=0.5, label="Generation")
-    idx = mask == 1
-    if idx.sum() > 0:
-        axes[2].scatter(ts[idx], act[idx], c="red", s=20, zorder=5,
-                       label=f"Anomalies ({idx.sum()})")
-    axes[2].set_title(f"{model_name} - Detected Anomalies")
+    if categories:
+        _scatter_categories(axes[2], ts, act, categories)
+    else:
+        idx = mask == 1
+        if idx.sum() > 0:
+            axes[2].scatter(ts[idx], act[idx], c="red", s=20, zorder=5,
+                           label=f"Anomalies ({idx.sum()})")
+    axes[2].set_title(f"{model_name} - Detected Anomalies by Category")
     axes[2].set_ylabel("Generation (kW)")
-    axes[2].legend()
+    axes[2].legend(loc="upper left", fontsize=9, framealpha=0.9)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
 
+    # --- Individual panel 1: Actual vs Predicted ---
+    fig, ax = plt.subplots(figsize=(16, 5))
+    ax.plot(ts, act, "r-", lw=0.5, alpha=0.7, label="Actual")
+    ax.plot(ts, pred, "b-", lw=0.5, alpha=0.7, label="Predicted")
+    ax.set_title(f"{model_name} - Actual vs Predicted")
+    ax.set_ylabel("Generation (kW)")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(plot_dir / "actual_vs_predicted.png", dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # --- Individual panel 2: MAE with threshold ---
+    fig, ax = plt.subplots(figsize=(16, 5))
+    ax.plot(ts, mae, color="gray", lw=0.5)
+    ax.axhline(threshold, color="red", ls="--", label=f"Threshold={threshold:.2f}")
+    ax.set_title(f"{model_name} - Prediction Error (MAE)")
+    ax.set_ylabel("MAE")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(plot_dir / "prediction_error.png", dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # --- Individual panel 3: Anomaly categories ---
+    fig, ax = plt.subplots(figsize=(16, 5))
+    ax.plot(ts, act, color="gray", lw=0.5, label="Generation")
+    if categories:
+        _scatter_categories(ax, ts, act, categories)
+    else:
+        idx = mask == 1
+        if idx.sum() > 0:
+            ax.scatter(ts[idx], act[idx], c="red", s=20, zorder=5,
+                      label=f"Anomalies ({idx.sum()})")
+    ax.set_title(f"{model_name} - Detected Anomalies by Category")
+    ax.set_ylabel("Generation (kW)")
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
+    plt.tight_layout()
+    plt.savefig(plot_dir / "anomaly_categories.png", dpi=150, bbox_inches="tight")
+    plt.close()
+
 
 def plot_isolation_forest(timestamps, generation, anomalies, scores,
-                           model_name: str, save_path: Path):
+                           model_name: str, save_path: Path,
+                           categories: dict = None):
+    """Combined 2-panel + individual plots for Isolation Forest."""
+    plot_dir = save_path.parent
+
+    # --- Combined 2-panel ---
     fig, axes = plt.subplots(2, 1, figsize=(16, 8))
 
     axes[0].plot(timestamps, generation, color="gray", lw=0.5, label="Generation")
-    mask = anomalies == 1
-    axes[0].scatter(timestamps[mask], generation[mask],
-                   color="red", s=15, label=f"Anomalies ({mask.sum()})", zorder=5)
-    axes[0].set_title(f"{model_name} - Anomaly Detection")
+    if categories:
+        _scatter_categories(axes[0], timestamps, generation, categories, s=15)
+    else:
+        mask = anomalies == 1
+        axes[0].scatter(timestamps[mask], generation[mask],
+                       color="red", s=15, label=f"Anomalies ({mask.sum()})", zorder=5)
+    axes[0].set_title(f"{model_name} - Anomaly Detection by Category")
     axes[0].set_ylabel("Generation (kW)")
-    axes[0].legend()
+    axes[0].legend(loc="upper left", fontsize=9, framealpha=0.9)
 
     axes[1].plot(timestamps, scores, color="blue", lw=0.5)
     axes[1].axhline(0, color="red", ls="--")
@@ -129,13 +206,44 @@ def plot_isolation_forest(timestamps, generation, anomalies, scores,
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
 
+    # --- Individual: Anomaly categories ---
+    fig, ax = plt.subplots(figsize=(16, 5))
+    ax.plot(timestamps, generation, color="gray", lw=0.5, label="Generation")
+    if categories:
+        _scatter_categories(ax, timestamps, generation, categories, s=15)
+    else:
+        mask = anomalies == 1
+        ax.scatter(timestamps[mask], generation[mask],
+                  color="red", s=15, label=f"Anomalies ({mask.sum()})", zorder=5)
+    ax.set_title(f"{model_name} - Detected Anomalies by Category")
+    ax.set_ylabel("Generation (kW)")
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
+    plt.tight_layout()
+    plt.savefig(plot_dir / "anomaly_categories.png", dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # --- Individual: Anomaly scores ---
+    fig, ax = plt.subplots(figsize=(16, 5))
+    ax.plot(timestamps, scores, color="blue", lw=0.5)
+    ax.axhline(0, color="red", ls="--")
+    ax.set_title(f"{model_name} - Anomaly Score (negative = anomalous)")
+    ax.set_ylabel("Score")
+    plt.tight_layout()
+    plt.savefig(plot_dir / "anomaly_scores.png", dpi=150, bbox_inches="tight")
+    plt.close()
+
 
 def plot_autoencoder_results(timestamps, actual, recon_error, anomalies,
-                              threshold, model_name: str, save_path: Path):
-    fig, axes = plt.subplots(2, 1, figsize=(16, 8))
-
+                              threshold, model_name: str, save_path: Path,
+                              categories: dict = None):
+    """Combined 2-panel + individual plots for Autoencoder."""
     n = min(len(timestamps), len(recon_error))
     ts = timestamps[:n]
+    act = actual[:n]
+    plot_dir = save_path.parent
+
+    # --- Combined 2-panel ---
+    fig, axes = plt.subplots(2, 1, figsize=(16, 8))
 
     axes[0].plot(ts, recon_error[:n], color="gray", lw=0.5)
     axes[0].axhline(threshold, color="red", ls="--", label=f"Threshold={threshold:.4f}")
@@ -143,17 +251,48 @@ def plot_autoencoder_results(timestamps, actual, recon_error, anomalies,
     axes[0].set_ylabel("MAE")
     axes[0].legend()
 
-    axes[1].plot(ts, actual[:n], color="gray", lw=0.5, label="Generation")
-    mask = anomalies[:n] == 1
-    if mask.sum() > 0:
-        axes[1].scatter(ts[mask], actual[:n][mask], c="red", s=15, zorder=5,
-                       label=f"Anomalies ({mask.sum()})")
-    axes[1].set_title(f"{model_name} - Detected Anomalies")
+    axes[1].plot(ts, act, color="gray", lw=0.5, label="Generation")
+    if categories:
+        _scatter_categories(axes[1], ts, act, categories, s=15)
+    else:
+        mask = anomalies[:n] == 1
+        if mask.sum() > 0:
+            axes[1].scatter(ts[mask], act[mask], c="red", s=15, zorder=5,
+                           label=f"Anomalies ({mask.sum()})")
+    axes[1].set_title(f"{model_name} - Detected Anomalies by Category")
     axes[1].set_ylabel("Generation (kW)")
-    axes[1].legend()
+    axes[1].legend(loc="upper left", fontsize=9, framealpha=0.9)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # --- Individual: Reconstruction error ---
+    fig, ax = plt.subplots(figsize=(16, 5))
+    ax.plot(ts, recon_error[:n], color="gray", lw=0.5)
+    ax.axhline(threshold, color="red", ls="--", label=f"Threshold={threshold:.4f}")
+    ax.set_title(f"{model_name} - Reconstruction Error")
+    ax.set_ylabel("MAE")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(plot_dir / "reconstruction_error.png", dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # --- Individual: Anomaly categories ---
+    fig, ax = plt.subplots(figsize=(16, 5))
+    ax.plot(ts, act, color="gray", lw=0.5, label="Generation")
+    if categories:
+        _scatter_categories(ax, ts, act, categories, s=15)
+    else:
+        mask = anomalies[:n] == 1
+        if mask.sum() > 0:
+            ax.scatter(ts[mask], act[mask], c="red", s=15, zorder=5,
+                      label=f"Anomalies ({mask.sum()})")
+    ax.set_title(f"{model_name} - Detected Anomalies by Category")
+    ax.set_ylabel("Generation (kW)")
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
+    plt.tight_layout()
+    plt.savefig(plot_dir / "anomaly_categories.png", dpi=150, bbox_inches="tight")
     plt.close()
 
 
@@ -186,20 +325,28 @@ def plot_anomaly_comparison(anomaly_counts: dict, save_path: Path):
 
 
 def plot_ensemble(timestamps, actual, votes, ensemble_anomalies,
-                   min_votes: int, save_path: Path):
+                   min_votes: int, save_path: Path,
+                   categories: dict = None):
+    """Combined 2-panel + individual plots for Ensemble."""
     n = min(len(timestamps), len(actual), len(votes))
     ts = timestamps[:n]
+    act = actual[:n]
+    plot_dir = save_path.parent
 
+    # --- Combined 2-panel ---
     fig, axes = plt.subplots(2, 1, figsize=(16, 10))
 
-    axes[0].plot(ts, actual[:n], color="gray", lw=0.5, label="Generation")
-    mask = ensemble_anomalies[:n] == 1
-    if mask.sum() > 0:
-        axes[0].scatter(ts[mask], actual[:n][mask], c="red", s=20, zorder=5,
-                       label=f"Anomalies ({mask.sum()})")
-    axes[0].set_title("Ensemble Anomaly Detection (Majority Vote)")
+    axes[0].plot(ts, act, color="gray", lw=0.5, label="Generation")
+    if categories:
+        _scatter_categories(axes[0], ts, act, categories)
+    else:
+        mask = ensemble_anomalies[:n] == 1
+        if mask.sum() > 0:
+            axes[0].scatter(ts[mask], act[mask], c="red", s=20, zorder=5,
+                           label=f"Anomalies ({mask.sum()})")
+    axes[0].set_title("Ensemble Anomaly Detection by Category (Majority Vote)")
     axes[0].set_ylabel("Generation (kW)")
-    axes[0].legend()
+    axes[0].legend(loc="upper left", fontsize=9, framealpha=0.9)
 
     axes[1].bar(ts, votes[:n], color="steelblue", width=0.01, alpha=0.7)
     axes[1].axhline(min_votes, color="red", ls="--", label=f"Threshold ({min_votes} votes)")
@@ -209,4 +356,32 @@ def plot_ensemble(timestamps, actual, votes, ensemble_anomalies,
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # --- Individual: Anomaly categories ---
+    fig, ax = plt.subplots(figsize=(16, 5))
+    ax.plot(ts, act, color="gray", lw=0.5, label="Generation")
+    if categories:
+        _scatter_categories(ax, ts, act, categories)
+    else:
+        mask = ensemble_anomalies[:n] == 1
+        if mask.sum() > 0:
+            ax.scatter(ts[mask], act[mask], c="red", s=20, zorder=5,
+                      label=f"Anomalies ({mask.sum()})")
+    ax.set_title("Ensemble - Detected Anomalies by Category")
+    ax.set_ylabel("Generation (kW)")
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
+    plt.tight_layout()
+    plt.savefig(plot_dir / "anomaly_categories.png", dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # --- Individual: Vote counts ---
+    fig, ax = plt.subplots(figsize=(16, 5))
+    ax.bar(ts, votes[:n], color="steelblue", width=0.01, alpha=0.7)
+    ax.axhline(min_votes, color="red", ls="--", label=f"Threshold ({min_votes} votes)")
+    ax.set_title("Ensemble - Model Agreement Count")
+    ax.set_ylabel("Votes")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(plot_dir / "vote_counts.png", dpi=150, bbox_inches="tight")
     plt.close()
