@@ -7,6 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from pathlib import Path
+from sklearn.metrics import confusion_matrix as sk_confusion_matrix
 
 
 plt.style.use("seaborn-v0_8-whitegrid")
@@ -384,4 +385,39 @@ def plot_ensemble(timestamps, actual, votes, ensemble_anomalies,
     ax.legend()
     plt.tight_layout()
     plt.savefig(plot_dir / "vote_counts.png", dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray,
+                          model_name: str, save_path: Path):
+    """Save 2×2 confusion matrix heatmap for binary anomaly detection."""
+    cm = sk_confusion_matrix(y_true, y_pred, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+
+    labels = ["Normal", "Anomaly"]
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(cm, interpolation="nearest", cmap=plt.cm.Blues)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+    ax.set_xticklabels(labels, fontsize=12)
+    ax.set_yticklabels(labels, fontsize=12)
+    ax.set_xlabel("Predicted", fontsize=13)
+    ax.set_ylabel("Actual", fontsize=13)
+    ax.set_title(f"{model_name} — Confusion Matrix", fontsize=13)
+
+    thresh = cm.max() / 2
+    cell_labels = [
+        ("TN", tn), ("FP", fp),
+        ("FN", fn), ("TP", tp),
+    ]
+    for idx, (tag, val) in enumerate(cell_labels):
+        i, j = divmod(idx, 2)
+        color = "white" if cm[i, j] > thresh else "black"
+        ax.text(j, i, f"{tag}\n{val:,}", ha="center", va="center",
+                color=color, fontsize=13, fontweight="bold")
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()

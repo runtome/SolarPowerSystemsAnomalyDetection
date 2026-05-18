@@ -2,7 +2,12 @@
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from pathlib import Path
+
+from sklearn.metrics import (
+    mean_squared_error, mean_absolute_error, r2_score,
+    precision_score, recall_score, f1_score, confusion_matrix,
+)
 
 
 def evaluate_model(actual: np.ndarray, predicted: np.ndarray, model_name: str) -> dict:
@@ -198,3 +203,108 @@ def classify_anomalies(anomaly_mask: np.ndarray, timestamps,
 def build_results_table(all_results: list) -> pd.DataFrame:
     """Build comparison DataFrame from evaluation results."""
     return pd.DataFrame(all_results).set_index("model").round(4)
+
+
+_LABEL_BOOL_COLS = ["HighIrr-LowGen", "SuddenDrop", "EfficiencyDecline", "GenSpike", "Gen-ZeroIrr"]
+
+
+def align_labels_to_model(anomaly_mask: np.ndarray, timestamps, label_csv) -> tuple:
+    """Return (y_true, y_pred) aligned to model timestamps from the label CSV.
+
+    Returns (None, None) if label CSV doesn't exist or has no matching columns.
+    """
+    label_csv = Path(label_csv)
+    if not label_csv.exists():
+        return None, None
+
+    label_df = pd.read_csv(label_csv, index_col=0, parse_dates=True)
+    bool_cols = [c for c in _LABEL_BOOL_COLS if c in label_df.columns]
+    if not bool_cols:
+        return None, None
+
+    gt = label_df.reindex(timestamps)
+    y_true = gt[bool_cols].any(axis=1).fillna(False).astype(int).values
+    y_pred = anomaly_mask.astype(int)
+    min_len = min(len(y_true), len(y_pred))
+    return y_true[:min_len], y_pred[:min_len]
+
+
+def print_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray, model_name: str):
+    """Print 2×2 text confusion matrix with precision / recall / F1."""
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+    prec = precision_score(y_true, y_pred, zero_division=0)
+    rec  = recall_score(y_true, y_pred, zero_division=0)
+    f1   = f1_score(y_true, y_pred, zero_division=0)
+
+    print(f"\n  Confusion Matrix ({model_name} vs Labels):")
+    print(f"  {'':22s}  {'Pred Normal':>12} {'Pred Anomaly':>13}")
+    print(f"  {'Actual Normal':22s}  {tn:>12,} {fp:>13,}")
+    print(f"  {'Actual Anomaly':22s}  {fn:>12,} {tp:>13,}")
+    print(f"  Precision: {prec:.4f}  Recall: {rec:.4f}  F1: {f1:.4f}")
+
+
+def evaluate_anomaly_performance(
+    anomaly_store: dict,
+    timestamps_store: dict,
+    label_csv,
+) -> pd.DataFrame | None:
+    """Compare per-model anomaly predictions against ground truth label CSV.
+
+    Returns DataFrame (index=model) with columns: precision, recall, f1, tp, fp, tn, fn.
+    Returns None if label CSV is missing.
+    """
+    label_csv = Path(label_csv)
+    if not label_csv.exists():
+        return None
+
+    label_df = pd.read_csv(label_csv, index_col=0, parse_dates=True)
+    bool_cols = [c for c in _LABEL_BOOL_COLS if c in label_df.columns]
+    if not bool_cols:
+        return None
+
+    rows = []
+    for model_name, anomaly_mask in anomaly_store.items():
+        ts = timestamps_store.get(model_name)
+        if ts is None:
+            continue
+
+        gt = label_df.reindex(ts)
+        y_true = gt[bool_cols].any(axis=1).fillna(False).astype(int).values
+        y_pred = anomaly_mask.astype(int)
+
+        min_len = min(len(y_true), len(y_pred))
+        y_true = y_true[:min_len]
+        y_pred = y_pred[:min_len]
+
+        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+        tn, fp, fn, tp = cm.ravel()
+
+        rows.append({
+            "model":     model_name,
+            "precision": round(precision_score(y_true, y_pred, zero_division=0), 4),
+            "recall":    round(recall_score(y_true, y_pred, zero_division=0), 4),
+            "f1":        round(f1_score(y_true, y_pred, zero_division=0), 4),
+            "tp": int(tp), "fp": int(fp), "tn": int(tn), "fn": int(fn),
+        })
+
+    if not rows:
+        return None
+    return pd.DataFrame(rows).set_index("model")
+
+
+def print_anomaly_performance(metrics_df: pd.DataFrame):
+    """Print formatted anomaly detection performance table."""
+    print("\n" + "=" * 74)
+    print("  Anomaly Detection Performance (vs Ground Truth Labels)")
+    print("=" * 74)
+    hdr = f"  {'Model':<22} {'Precision':>10} {'Recall':>8} {'F1':>8}  {'TP':>5} {'FP':>5} {'TN':>7} {'FN':>5}"
+    print(hdr)
+    print("  " + "-" * 72)
+    for model, row in metrics_df.iterrows():
+        print(
+            f"  {model:<22} {row['precision']:>10.4f} {row['recall']:>8.4f}"
+            f" {row['f1']:>8.4f}  {row['tp']:>5} {row['fp']:>5}"
+            f" {row['tn']:>7} {row['fn']:>5}"
+        )
+    print("=" * 74)

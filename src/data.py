@@ -143,16 +143,6 @@ class SolarDataModule:
         self.train_df = self.df.iloc[:split_idx]
         self.test_df = self.df.iloc[split_idx:]
 
-        # Anomaly label split counts
-        label_csv = Path(self.data_cfg.cleaned_csv).parent / (
-            Path(self.data_cfg.cleaned_csv).stem + "_Label.csv"
-        )
-        if label_csv.exists():
-            label_df = pd.read_csv(label_csv, index_col=0, parse_dates=True)
-            _print_label_split_counts(label_df, split_idx)
-        else:
-            print("  [skip] Label CSV not found — run EDA first to generate it")
-
         # Scale
         self.train_scaled = self.scaler.fit_transform(self.train_df)
         self.test_scaled = self.scaler.transform(self.test_df)
@@ -174,6 +164,17 @@ class SolarDataModule:
 
         print(f"  Data loaded: {len(self.df)} rows")
         print(f"  Train: {self.train_df.shape[0]} | Test: {self.test_df.shape[0]}")
+
+        # Anomaly label split counts
+        label_csv = Path(self.data_cfg.cleaned_csv).parent / (
+            Path(self.data_cfg.cleaned_csv).stem + "_Label.csv"
+        )
+        if label_csv.exists():
+            label_df = pd.read_csv(label_csv, index_col=0, parse_dates=True)
+            _print_label_split_counts(label_df, split_idx)
+        else:
+            print("  [skip] Label CSV not found — run EDA first to generate it")
+
         print(f"  Sequence config: input={inp} -> output={out}")
         print(f"  X_train: {self.X_train.shape} | Y_train: {self.Y_train.shape}")
         print(f"  X_test:  {self.X_test.shape}  | Y_test:  {self.Y_test.shape}")

@@ -107,13 +107,15 @@ from src.trainer import train_model, predict
 from src.evaluate import (
     evaluate_model, detect_anomalies_3sigma, detect_anomalies_reconstruction,
     ensemble_voting, build_results_table, classify_anomalies,
+    evaluate_anomaly_performance, print_anomaly_performance,
+    align_labels_to_model, print_confusion_matrix,
 )
 from src.eda import run_eda
 from src.visualize import (
     plot_train_test_split, plot_training_loss, plot_prediction_vs_actual,
     plot_error_distribution, plot_anomalies, plot_isolation_forest,
     plot_autoencoder_results, plot_model_comparison, plot_anomaly_comparison,
-    plot_ensemble,
+    plot_ensemble, plot_confusion_matrix,
 )
 
 
@@ -172,10 +174,12 @@ def build_dl_model(name: str, n_features: int, seq_cfg: SequenceConfig,
 
 
 def run_ml_models(data_mod: SolarDataModule, model_cfg: ModelConfig,
-                  anomaly_cfg: AnomalyConfig, path_cfg: PathConfig):
+                  anomaly_cfg: AnomalyConfig, path_cfg: PathConfig,
+                  label_csv: Path = None):
     """Train and evaluate ML models."""
     results = []
     anomaly_store = {}
+    timestamps_store = {}
 
     # --- Isolation Forest ---
     name = "Isolation_Forest"
@@ -203,6 +207,13 @@ def run_ml_models(data_mod: SolarDataModule, model_cfg: ModelConfig,
         categories=iso_cats,
     )
     anomaly_store[name] = iso_anomalies
+    timestamps_store[name] = data_mod.test_df.index
+    if label_csv:
+        y_true, y_pred = align_labels_to_model(iso_anomalies, data_mod.test_df.index, label_csv)
+        if y_true is not None:
+            print_confusion_matrix(y_true, y_pred, name)
+            plot_confusion_matrix(y_true, y_pred, name,
+                                  path_cfg.plots_dir(name) / "confusion_matrix.png")
 
     # --- Random Forest ---
     name = "Random_Forest"
@@ -250,17 +261,26 @@ def run_ml_models(data_mod: SolarDataModule, model_cfg: ModelConfig,
     plot_error_distribution(rf_mae, rf_thresh, name, pdir / "error_distribution.png")
 
     anomaly_store[name] = rf_anomalies
+    timestamps_store[name] = data_mod.test_df.index
+    if label_csv:
+        y_true, y_pred = align_labels_to_model(rf_anomalies, data_mod.test_df.index, label_csv)
+        if y_true is not None:
+            print_confusion_matrix(y_true, y_pred, name)
+            plot_confusion_matrix(y_true, y_pred, name,
+                                  path_cfg.plots_dir(name) / "confusion_matrix.png")
 
-    return results, anomaly_store
+    return results, anomaly_store, timestamps_store
 
 
 def run_dl_models(model_names: list, data_mod: SolarDataModule,
                   seq_cfg: SequenceConfig, train_cfg: TrainConfig,
                   model_cfg: ModelConfig, anomaly_cfg: AnomalyConfig,
-                  path_cfg: PathConfig, device: torch.device):
+                  path_cfg: PathConfig, device: torch.device,
+                  label_csv: Path = None):
     """Train and evaluate DL models."""
     results = []
     anomaly_store = {}
+    timestamps_store = {}
 
     for name in model_names:
         model = build_dl_model(name, data_mod.n_features, seq_cfg, model_cfg, device)
@@ -320,6 +340,13 @@ def run_dl_models(model_names: list, data_mod: SolarDataModule,
                                     pdir / "reconstruction_error_dist.png")
 
             anomaly_store[name] = anomalies
+            timestamps_store[name] = ae_timestamps[:n]
+            if label_csv:
+                y_true, y_pred = align_labels_to_model(anomalies[:n], ae_timestamps[:n], label_csv)
+                if y_true is not None:
+                    print_confusion_matrix(y_true, y_pred, name)
+                    plot_confusion_matrix(y_true, y_pred, name,
+                                         path_cfg.plots_dir(name) / "confusion_matrix.png")
 
         else:
             # --- Prediction model path ---
@@ -377,8 +404,15 @@ def run_dl_models(model_names: list, data_mod: SolarDataModule,
                                     pdir / "error_distribution.png")
 
             anomaly_store[name] = anomalies
+            timestamps_store[name] = ts
+            if label_csv:
+                y_true, y_pred = align_labels_to_model(anomalies, ts, label_csv)
+                if y_true is not None:
+                    print_confusion_matrix(y_true, y_pred, name)
+                    plot_confusion_matrix(y_true, y_pred, name,
+                                         path_cfg.plots_dir(name) / "confusion_matrix.png")
 
-    return results, anomaly_store
+    return results, anomaly_store, timestamps_store
 
 
 def run_one_site(
@@ -437,27 +471,35 @@ def run_one_site(
         comp_dir / "train_test_split.png",
     )
 
+    # Label CSV for per-model confusion matrix evaluation
+    label_csv = Path(data_cfg.cleaned_csv).parent / (
+        Path(data_cfg.cleaned_csv).stem + "_Label.csv"
+    )
+
     # --- Train ML Models ---
     all_results = []
     all_anomalies = {}
+    all_timestamps = {}
 
     if ml_to_run:
         print("\n[3/6] Training ML models...")
-        ml_results, ml_anomalies = run_ml_models(
-            data_mod, model_cfg, anomaly_cfg, path_cfg
+        ml_results, ml_anomalies, ml_ts = run_ml_models(
+            data_mod, model_cfg, anomaly_cfg, path_cfg, label_csv=label_csv
         )
         all_results.extend(ml_results)
         all_anomalies.update(ml_anomalies)
+        all_timestamps.update(ml_ts)
 
     # --- Train DL Models ---
     if dl_to_run:
         print("\n[4/6] Training DL models...")
-        dl_results, dl_anomalies = run_dl_models(
+        dl_results, dl_anomalies, dl_ts = run_dl_models(
             dl_to_run, data_mod, seq_cfg, train_cfg,
-            model_cfg, anomaly_cfg, path_cfg, device,
+            model_cfg, anomaly_cfg, path_cfg, device, label_csv=label_csv,
         )
         all_results.extend(dl_results)
         all_anomalies.update(dl_anomalies)
+        all_timestamps.update(dl_ts)
 
     # --- Comparison ---
     print("\n[5/6] Generating comparison plots...")
@@ -513,6 +555,19 @@ def run_one_site(
                 "vote_distribution": distribution,
                 "category_counts": ens_cat_counts,
             }, f, indent=2)
+
+        all_timestamps["Ensemble"] = ts
+        all_anomalies["Ensemble"] = ensemble
+
+    # --- Classification Performance vs Ground Truth Labels ---
+    perf_df = evaluate_anomaly_performance(all_anomalies, all_timestamps, label_csv)
+    if perf_df is not None:
+        print_anomaly_performance(perf_df)
+        perf_df.to_csv(comp_dir / "classification_metrics.csv")
+        with open(comp_dir / "classification_metrics.json", "w") as f:
+            json.dump(perf_df.reset_index().to_dict(orient="records"), f, indent=2)
+    else:
+        print("\n  [skip] classification_metrics — Label CSV not found (run EDA first)")
 
     print("\n" + "=" * 60)
     print(f"  {site_name} — Pipeline complete!")
