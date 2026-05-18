@@ -13,7 +13,10 @@
       "Bash(ls:*)",
       "Bash(cd:*)",
       "Bash(mv 01_EDA.ipynb notebooks/)",
-      "Bash(mv 02_training_anomaly_detection.ipynb notebooks/)"
+      "Bash(mv 02_training_anomaly_detection.ipynb notebooks/)",
+      "Bash(Get-ChildItem -Path \"D:\\\\code\\\\260327_Solar_Cell\\\\SolarPowerSystemsAnomalyDetection\" -Recurse -Force)",
+      "Bash(Select-Object -First 50)",
+      "Bash(Format-Table FullName, PSIsContainer)"
     ]
   }
 }
