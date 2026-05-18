@@ -33,19 +33,61 @@ def _load_csv_by_prefix(data_dir: Path, prefix: str, col_name: str) -> pd.DataFr
     return df, path.name
 
 
-def load_raw_site(data_dir: str | Path) -> dict:
-    """Load 4 raw CSVs from a site folder using filename patterns.
+def _load_and_sum_gen_csvs(data_dir: Path, prefix: str):
+    """Load all gen*.csv files and sum generation at matching datetimes.
+
+    Returns:
+        df_summed: DataFrame with columns ["datetime", "generation_kw"]
+        fnames: list of filenames loaded (length >= 1)
+        per_file: list of dicts {fname, rows, start, end, nulls, diffs} for logging
+    """
+    matches = sorted(data_dir.glob(f"{prefix}*.csv"))
+    if not matches:
+        raise FileNotFoundError(f"No CSV starting with '{prefix}' in {data_dir}")
+
+    per_file = []
+    frames = []
+    for path in matches:
+        df = pd.read_csv(path, parse_dates=[0], usecols=[0, 1])
+        df.columns = ["datetime", "generation_kw"]
+        diffs = df["datetime"].diff().dropna()
+        per_file.append({
+            "fname": path.name,
+            "rows": len(df),
+            "start": df["datetime"].min(),
+            "end": df["datetime"].max(),
+            "nulls": int(df["generation_kw"].isnull().sum()),
+            "diffs": diffs,
+        })
+        frames.append(df)
+
+    if len(frames) == 1:
+        return frames[0], [per_file[0]["fname"]], per_file
+
+    combined = pd.concat(frames)
+    summed = (combined.groupby("datetime")["generation_kw"]
+                      .sum()
+                      .reset_index())
+    fnames = [p["fname"] for p in per_file]
+    return summed, fnames, per_file
+
+
+def load_raw_site(data_dir: str | Path) -> tuple:
+    """Load raw CSVs from a site folder using filename patterns.
 
     Pattern rules:
-        Temp*.csv       -> temperature_c
-        Irradiance*.csv -> irradiance_wm2
-        load*.csv       -> load_kw
-        gen*.csv        -> generation_kw
+        Actual Temp-Ambient*.csv -> temperature_c
+        Actual Irradiance*.csv   -> irradiance_wm2
+        load*.csv                -> load_kw
+        gen*.csv                 -> generation_kw  (multiple files are summed)
 
-    Returns dict of {col_name: (DataFrame, filename)}.
+    Returns:
+        raw: dict of {col_name: (DataFrame, filename_display_str)}
+        gen_detail: list of per-file dicts for generation_kw logging
     """
     data_dir = Path(data_dir)
     raw = {}
+    gen_detail = []
     patterns = [
         ("Actual Temp-Ambient", "temperature_c"),
         ("Actual Irradiance", "irradiance_wm2"),
@@ -53,9 +95,14 @@ def load_raw_site(data_dir: str | Path) -> dict:
         ("gen", "generation_kw"),
     ]
     for prefix, col_name in patterns:
-        df, fname = _load_csv_by_prefix(data_dir, prefix, col_name)
-        raw[col_name] = (df, fname)
-    return raw
+        if col_name == "generation_kw":
+            df, fnames, gen_detail = _load_and_sum_gen_csvs(data_dir, prefix)
+            fname_display = " + ".join(fnames)
+            raw[col_name] = (df, fname_display)
+        else:
+            df, fname = _load_csv_by_prefix(data_dir, prefix, col_name)
+            raw[col_name] = (df, fname)
+    return raw, gen_detail
 
 
 # ---------------------------------------------------------------------------
@@ -110,25 +157,54 @@ def zero_no_sun_generation(df: pd.DataFrame) -> pd.DataFrame:
 # 3. Print EDA summary to terminal
 # ---------------------------------------------------------------------------
 
-def print_raw_summary(raw: dict):
-    """Print summary of raw data."""
+def _print_interval_stats(diffs: pd.Series):
+    """Print median interval, max gap, and gap count from a diff series."""
+    print(f"    Median interval: {diffs.median()}")
+    print(f"    Max gap: {diffs.max()}")
+    gaps = diffs[diffs > 2 * diffs.median()]
+    print(f"    Gaps > 2x median: {len(gaps)}")
+
+
+def print_raw_summary(raw: dict, gen_detail: list = None):
+    """Print summary of raw data.
+
+    gen_detail: per-file info list returned by load_raw_site; used to show
+    individual file stats when multiple gen files are summed.
+    """
     print("\n" + "=" * 60)
     print("  Raw Data Summary")
     print("=" * 60)
     for col_name, (df, fname) in raw.items():
-        n = len(df)
-        nulls = df[col_name].isnull().sum()
-        print(f"\n  {col_name} ({fname}):")
-        print(f"    Rows: {n:,}")
-        print(f"    Range: {df['datetime'].min()} to {df['datetime'].max()}")
-        print(f"    Nulls: {nulls} ({nulls/n*100:.2f}%)")
-
-        # Time interval analysis
-        diffs = df["datetime"].diff().dropna()
-        print(f"    Median interval: {diffs.median()}")
-        print(f"    Max gap: {diffs.max()}")
-        gaps = diffs[diffs > 2 * diffs.median()]
-        print(f"    Gaps > 2x median: {len(gaps)}")
+        if col_name == "generation_kw" and gen_detail and len(gen_detail) > 1:
+            # Multiple gen files — show each file then the summed result
+            print(f"\n  generation_kw — {len(gen_detail)} files summed:")
+            for i, info in enumerate(gen_detail, start=1):
+                n = info["rows"]
+                nulls = info["nulls"]
+                print(f"    [{i}] {info['fname']}")
+                print(f"        Rows: {n:,}")
+                print(f"        Range: {info['start']} to {info['end']}")
+                print(f"        Nulls: {nulls} ({nulls/n*100:.2f}%)")
+                _print_interval_stats(info["diffs"])
+            # Summed result
+            n = len(df)
+            nulls = df["generation_kw"].isnull().sum()
+            diffs = df["datetime"].diff().dropna()
+            print(f"    --- After sum ---")
+            print(f"    Rows: {n:,}")
+            print(f"    Range: {df['datetime'].min()} to {df['datetime'].max()}")
+            print(f"    Nulls: {nulls} ({nulls/n*100:.2f}%)")
+            _print_interval_stats(diffs)
+        else:
+            # Single file — existing format
+            n = len(df)
+            nulls = df[col_name].isnull().sum()
+            print(f"\n  {col_name} ({fname}):")
+            print(f"    Rows: {n:,}")
+            print(f"    Range: {df['datetime'].min()} to {df['datetime'].max()}")
+            print(f"    Nulls: {nulls} ({nulls/n*100:.2f}%)")
+            diffs = df["datetime"].diff().dropna()
+            _print_interval_stats(diffs)
 
 
 def print_merge_summary(df_merged: pd.DataFrame, df_clean: pd.DataFrame):
@@ -669,8 +745,8 @@ def run_eda(data_dir: str, output_base: str = "outputs") -> tuple:
     print(f"  Cleaned CSV: {cleaned_csv}")
 
     # --- Load raw ---
-    raw = load_raw_site(data_dir)
-    print_raw_summary(raw)
+    raw, gen_detail = load_raw_site(data_dir)
+    print_raw_summary(raw, gen_detail)
 
     # --- Clean & merge ---
     df_merged, df_clean = clean_and_merge(raw)
