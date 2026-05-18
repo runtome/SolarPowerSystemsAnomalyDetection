@@ -1,4 +1,4 @@
-"""Generate updated presentation using run_3 results with 5-category anomaly detection."""
+"""Generate updated presentation using Witthayanivej results with 5-category anomaly detection."""
 
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
@@ -27,8 +27,8 @@ TABLE_ROW_ALT = RGBColor(0xE8, 0xF4, 0xF8)
 SECTION_BG = RGBColor(0x00, 0x50, 0x80)
 
 # --- Paths ---
-RUN_DIR = "../outputs/run_3"
-EDA_DIR = f"{RUN_DIR}/data_EDA/site_1"
+RUN_DIR = "../outputs/Witthayanivej"
+EDA_DIR = f"{RUN_DIR}/data_EDA/Witthayanivej"
 COMP_DIR = f"{RUN_DIR}/Comparison"
 ENS_DIR = f"{RUN_DIR}/Ensemble/plots"
 FIG_DIR = "figures/"
@@ -772,7 +772,7 @@ add_textbox(slide, Inches(1), Inches(4.2), Inches(11), Inches(0.8),
 # ============================================================
 # SAVE
 # ============================================================
-output_path = "Solar_Anomaly_Detection_Presentation_update.pptx"
+output_path = "260518_Solar_Anomaly_Detection_Presentation_update.pptx"
 prs.save(output_path)
 print(f"Presentation saved: {output_path}")
 print(f"Total slides: {len(prs.slides)}")

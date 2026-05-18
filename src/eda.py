@@ -47,8 +47,8 @@ def load_raw_site(data_dir: str | Path) -> dict:
     data_dir = Path(data_dir)
     raw = {}
     patterns = [
-        ("Temp", "temperature_c"),
-        ("Irradiance", "irradiance_wm2"),
+        ("Actual Temp-Ambient", "temperature_c"),
+        ("Actual Irradiance", "irradiance_wm2"),
         ("load", "load_kw"),
         ("gen", "generation_kw"),
     ]
