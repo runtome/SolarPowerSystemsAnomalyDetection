@@ -381,96 +381,32 @@ def run_dl_models(model_names: list, data_mod: SolarDataModule,
     return results, anomaly_store
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Solar Power Anomaly Detection Training Pipeline",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python run_training.py                                        # auto trial: run_1, run_2, ...
-  python run_training.py --trial-name baseline                  # named trial
-  python run_training.py --trial-name exp_lr --lr 0.0005        # experiment with name
-  python run_training.py --input-steps 6 --output-steps 2       # 1.5h in, 30min out
-  python run_training.py --models LSTM Transformer               # specific models only
-        """,
-    )
-    parser.add_argument("--input-steps", type=int, default=4,
-                        help="Number of input timesteps (default: 4 = 1 hour)")
-    parser.add_argument("--output-steps", type=int, default=1,
-                        help="Number of output timesteps to predict (default: 1 = 15min)")
-    parser.add_argument("--models", nargs="+", default=["all"],
-                        help="Models to train: all, LSTM, CNN_LSTM, LSTM_Autoencoder, "
-                             "Transformer, Isolation_Forest, Random_Forest")
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--patience", type=int, default=15)
-    parser.add_argument("--sigma", type=float, default=3.0,
-                        help="Sigma for anomaly threshold (default: 3.0)")
-    parser.add_argument("--trial-name", type=str, default=None,
-                        help="Trial name for output folder (default: auto run_1, run_2, ...)")
-    parser.add_argument("--data-dir", type=str, default="datasets/site_1")
-    parser.add_argument("--output-dir", type=str, default="outputs")
-    parser.add_argument("--seed", type=int, default=42)
-    args = parser.parse_args()
+def run_one_site(
+    site_dir: Path,
+    site_name: str,
+    ml_to_run: list,
+    dl_to_run: list,
+    seq_cfg: SequenceConfig,
+    train_cfg: TrainConfig,
+    model_cfg: ModelConfig,
+    anomaly_cfg: AnomalyConfig,
+    output_dir: str,
+    device: torch.device,
+    trial_name: str,
+):
+    """Run the full training pipeline for a single site."""
+    data_cfg = DataConfig(data_dir=str(site_dir))
+    path_cfg = PathConfig(base_output=output_dir, site_name=site_name)
 
-    # --- Resolve trial name ---
-    trial_name = resolve_trial_name(args.output_dir, args.trial_name)
-    args.output_dir = str(Path(args.output_dir) / trial_name)
-
-    # --- Setup logging ---
-    tee_out, tee_err = setup_logging(args, trial_name)
-
-    # --- Resolve models ---
-    if "all" in args.models:
-        ml_to_run = ML_MODELS[:]
-        dl_to_run = DL_MODELS[:]
-    else:
-        ml_to_run = [m for m in args.models if m in ML_MODELS]
-        dl_to_run = [m for m in args.models if m in DL_MODELS]
-        unknown = [m for m in args.models if m not in ALL_MODELS]
-        if unknown:
-            print(f"Unknown models: {unknown}")
-            print(f"Available: {ALL_MODELS}")
-            sys.exit(1)
-
-    # --- Configs ---
-    data_cfg = DataConfig(data_dir=args.data_dir)
-    seq_cfg = SequenceConfig(input_steps=args.input_steps, output_steps=args.output_steps)
-    train_cfg = TrainConfig(
-        epochs=args.epochs, batch_size=args.batch_size,
-        learning_rate=args.lr, patience=args.patience, seed=args.seed,
-    )
-    model_cfg = ModelConfig()
-    anomaly_cfg = AnomalyConfig(sigma=args.sigma)
-    path_cfg = PathConfig(base_output=args.output_dir)
-
-    # --- Device ---
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    torch.manual_seed(train_cfg.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(train_cfg.seed)
-
+    print("\n" + "=" * 60)
+    print(f"  {site_name}")
     print("=" * 60)
-    print("  Solar Power Anomaly Detection Pipeline")
-    print("=" * 60)
-    print(f"  Trial name:   {trial_name}")
-    print(f"  Device:       {device}")
-    if torch.cuda.is_available():
-        print(f"  GPU:          {torch.cuda.get_device_name(0)}")
-    print(f"  Input steps:  {seq_cfg.input_steps} ({seq_cfg.input_steps * 15} min)")
-    print(f"  Output steps: {seq_cfg.output_steps} ({seq_cfg.output_steps * 15} min)")
-    print(f"  Models (ML):  {ml_to_run}")
-    print(f"  Models (DL):  {dl_to_run}")
-    print(f"  Epochs:       {train_cfg.epochs}")
-    print(f"  Batch size:   {train_cfg.batch_size}")
-    print(f"  Sigma:        {anomaly_cfg.sigma}")
     print(f"  Output dir:   {path_cfg.base_output}")
     print("=" * 60)
 
     # --- EDA & Data Cleaning ---
     print("\n[1/6] Running EDA & data cleaning...")
-    run_eda(args.data_dir, args.output_dir)
+    run_eda(str(site_dir), output_dir)
 
     # --- Load Data ---
     print("\n[2/6] Loading and preparing data...")
@@ -482,6 +418,7 @@ Examples:
     joblib.dump(data_mod.scaler, comp_dir / "scaler.joblib")
     run_config = {
         "trial_name": trial_name,
+        "site_name": site_name,
         "input_steps": seq_cfg.input_steps,
         "output_steps": seq_cfg.output_steps,
         "features": data_cfg.features,
@@ -495,7 +432,6 @@ Examples:
     with open(comp_dir / "run_config.json", "w") as f:
         json.dump(run_config, f, indent=2)
 
-    # Plot train/test split
     plot_train_test_split(
         data_mod.train_df, data_mod.test_df, data_cfg.target,
         comp_dir / "train_test_split.png",
@@ -553,9 +489,7 @@ Examples:
         print(f"  Ensemble anomalies (>={anomaly_cfg.ensemble_min_votes} votes): {ensemble.sum()}")
         print(f"  Vote distribution: {distribution}")
 
-        # For ensemble plot, use the shortest aligned timestamps
         n = len(votes)
-        # Use test timestamps based on whether we have DL models
         if dl_to_run:
             ts = data_mod.test_timestamps[:n]
             y_act = data_mod.y_test_actual[:n]
@@ -564,10 +498,7 @@ Examples:
             ts = data_mod.test_df.index[:n]
             y_act_1d = data_mod.test_df[data_cfg.target].values[:n]
 
-        # Classify ensemble anomalies into categories
         ens_cats = classify_anomalies(ensemble, ts, data_mod.test_df)
-
-        # Print category breakdown
         ens_cat_counts = print_category_counts(ens_cats, "Ensemble")
 
         ens_dir = path_cfg.ensemble_dir()
@@ -584,8 +515,118 @@ Examples:
             }, f, indent=2)
 
     print("\n" + "=" * 60)
-    print("  Pipeline complete!")
+    print(f"  {site_name} — Pipeline complete!")
     print(f"  Results saved to: {path_cfg.base_output}/")
+    print("=" * 60)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Solar Power Anomaly Detection Training Pipeline",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python run_training.py                                        # auto trial: run_1, run_2, ...
+  python run_training.py --trial-name baseline                  # named trial
+  python run_training.py --trial-name exp_lr --lr 0.0005        # experiment with name
+  python run_training.py --input-steps 6 --output-steps 2       # 1.5h in, 30min out
+  python run_training.py --models LSTM Transformer               # specific models only
+  python run_training.py --datasets-dir datasets                 # all site folders
+        """,
+    )
+    parser.add_argument("--input-steps", type=int, default=4,
+                        help="Number of input timesteps (default: 4 = 1 hour)")
+    parser.add_argument("--output-steps", type=int, default=1,
+                        help="Number of output timesteps to predict (default: 1 = 15min)")
+    parser.add_argument("--models", nargs="+", default=["all"],
+                        help="Models to train: all, LSTM, CNN_LSTM, LSTM_Autoencoder, "
+                             "Transformer, Isolation_Forest, Random_Forest")
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--sigma", type=float, default=3.0,
+                        help="Sigma for anomaly threshold (default: 3.0)")
+    parser.add_argument("--trial-name", type=str, default=None,
+                        help="Trial name for output folder (default: auto run_1, run_2, ...)")
+    parser.add_argument("--data-dir", type=str, default=None,
+                        help="Single site data folder. When set, only this site is trained.")
+    parser.add_argument("--datasets-dir", type=str, default="datasets",
+                        help="Root folder of all site subfolders (default: datasets/). "
+                             "Ignored when --data-dir is set.")
+    parser.add_argument("--output-dir", type=str, default="outputs")
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+
+    # --- Resolve trial name ---
+    trial_name = resolve_trial_name(args.output_dir, args.trial_name)
+    args.output_dir = str(Path(args.output_dir) / trial_name)
+
+    # --- Setup logging ---
+    tee_out, tee_err = setup_logging(args, trial_name)
+
+    # --- Resolve models ---
+    if "all" in args.models:
+        ml_to_run = ML_MODELS[:]
+        dl_to_run = DL_MODELS[:]
+    else:
+        ml_to_run = [m for m in args.models if m in ML_MODELS]
+        dl_to_run = [m for m in args.models if m in DL_MODELS]
+        unknown = [m for m in args.models if m not in ALL_MODELS]
+        if unknown:
+            print(f"Unknown models: {unknown}")
+            print(f"Available: {ALL_MODELS}")
+            sys.exit(1)
+
+    # --- Shared configs (same for all sites) ---
+    seq_cfg = SequenceConfig(input_steps=args.input_steps, output_steps=args.output_steps)
+    train_cfg = TrainConfig(
+        epochs=args.epochs, batch_size=args.batch_size,
+        learning_rate=args.lr, patience=args.patience, seed=args.seed,
+    )
+    model_cfg = ModelConfig()
+    anomaly_cfg = AnomalyConfig(sigma=args.sigma)
+
+    # --- Device ---
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(train_cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(train_cfg.seed)
+
+    print("=" * 60)
+    print("  Solar Power Anomaly Detection Pipeline")
+    print("=" * 60)
+    print(f"  Trial name:   {trial_name}")
+    print(f"  Device:       {device}")
+    if torch.cuda.is_available():
+        print(f"  GPU:          {torch.cuda.get_device_name(0)}")
+    print(f"  Input steps:  {seq_cfg.input_steps} ({seq_cfg.input_steps * 15} min)")
+    print(f"  Output steps: {seq_cfg.output_steps} ({seq_cfg.output_steps * 15} min)")
+    print(f"  Models (ML):  {ml_to_run}")
+    print(f"  Models (DL):  {dl_to_run}")
+    print(f"  Epochs:       {train_cfg.epochs}")
+    print(f"  Batch size:   {train_cfg.batch_size}")
+    print(f"  Sigma:        {anomaly_cfg.sigma}")
+    print("=" * 60)
+
+    # --- Discover sites ---
+    if args.data_dir:
+        site_dirs = [Path(args.data_dir)]
+    else:
+        site_dirs = sorted(d for d in Path(args.datasets_dir).iterdir() if d.is_dir())
+    print(f"\n  Sites to train: {[d.name for d in site_dirs]}")
+
+    # --- Run per site ---
+    for site_dir in site_dirs:
+        run_one_site(
+            site_dir, site_dir.name,
+            ml_to_run, dl_to_run,
+            seq_cfg, train_cfg, model_cfg, anomaly_cfg,
+            args.output_dir, device, trial_name,
+        )
+
+    print("\n" + "=" * 60)
+    print(f"  All sites complete. Results in: {args.output_dir}/")
     print("=" * 60)
 
     # Close log file

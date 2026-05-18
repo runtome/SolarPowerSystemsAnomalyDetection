@@ -92,34 +92,35 @@ class AnomalyConfig:
 class PathConfig:
     """Output directory structure."""
     base_output: str = "outputs"
+    site_name: str = ""
 
     def model_dir(self, model_name: str) -> Path:
-        p = Path(self.base_output) / model_name / "model"
+        p = Path(self.base_output) / model_name / self.site_name / "model"
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     def loss_dir(self, model_name: str) -> Path:
-        p = Path(self.base_output) / model_name / "loss"
+        p = Path(self.base_output) / model_name / self.site_name / "loss"
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     def plots_dir(self, model_name: str) -> Path:
-        p = Path(self.base_output) / model_name / "plots"
+        p = Path(self.base_output) / model_name / self.site_name / "plots"
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     def ensemble_dir(self) -> Path:
-        p = Path(self.base_output) / "Ensemble" / "plots"
+        p = Path(self.base_output) / "Ensemble" / self.site_name / "plots"
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     def comparison_dir(self) -> Path:
-        p = Path(self.base_output) / "Comparison"
+        p = Path(self.base_output) / "Comparison" / self.site_name
         p.mkdir(parents=True, exist_ok=True)
         return p
 
-    def eda_dir(self, site_name: str) -> Path:
-        p = Path(self.base_output) / "data_EDA" / site_name
+    def eda_dir(self) -> Path:
+        p = Path(self.base_output) / "data_EDA" / self.site_name
         p.mkdir(parents=True, exist_ok=True)
         return p
 

@@ -18,7 +18,8 @@
       "Bash(Select-Object -First 50)",
       "Bash(Format-Table FullName, PSIsContainer)",
       "Bash(Get-ChildItem -Path \"D:\\\\code\\\\260327_Solar_Cell\\\\SolarPowerSystemsAnomalyDetection\" -Recurse -Name)",
-      "Bash(Get-ChildItem *)"
+      "Bash(Get-ChildItem *)",
+      "Bash(findstr /v \"UserWarning\\\\|tight_layout\\\\|Axes\")"
     ]
   }
 }

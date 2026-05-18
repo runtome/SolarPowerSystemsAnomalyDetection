@@ -4,6 +4,7 @@ Loads raw CSVs by filename pattern, cleans/merges to 15-min intervals,
 generates EDA plots, and saves cleaned CSV.
 """
 
+import math
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -17,33 +18,73 @@ plt.style.use("seaborn-v0_8-whitegrid")
 plt.rcParams["figure.figsize"] = (14, 5)
 plt.rcParams["font.size"] = 12
 
+VAR_COLORS = {
+    "generation_kw": "orange",
+    "irradiance_wm2": "gold",
+    "temperature_c": "red",
+    "load_kw": "blue",
+}
+VAR_TITLES = {
+    "generation_kw": "Solar Generation (kW)",
+    "irradiance_wm2": "Solar Irradiance (W/m²)",
+    "temperature_c": "Ambient Temperature (°C)",
+    "load_kw": "Power Consumption (kW)",
+}
+
+
+def _save(fig, path: Path, dpi: int = 150, site_name: str = ""):
+    """Save figure to path, appending 'Site : {site_name}' to the title if given."""
+    if site_name:
+        sup = fig._suptitle
+        if sup is not None and sup.get_text():
+            fig.suptitle(f"{sup.get_text()}\nSite : {site_name}", fontsize=12)
+            fig.subplots_adjust(top=0.90)
+        elif len(fig.axes) == 1:
+            ax0 = fig.axes[0]
+            t = ax0.get_title()
+            ax0.set_title("")
+            fig.suptitle(f"{t}\nSite : {site_name}" if t else f"Site : {site_name}",
+                         fontsize=12)
+            fig.subplots_adjust(top=0.88)
+        else:
+            fig.suptitle(f"Site : {site_name}", fontsize=11)
+            fig.subplots_adjust(top=0.92)
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
 
 # ---------------------------------------------------------------------------
 # 1. Load raw data by filename pattern
 # ---------------------------------------------------------------------------
 
-def _load_csv_by_prefix(data_dir: Path, prefix: str, col_name: str) -> pd.DataFrame:
-    """Find CSV matching prefix*, load first 2 columns only."""
-    matches = sorted(data_dir.glob(f"{prefix}*.csv"))
+def _find_csvs_by_keyword(data_dir: Path, keyword: str) -> list:
+    """Return sorted list of CSVs whose filename contains keyword (case-insensitive)."""
+    kw = keyword.lower()
+    return sorted(f for f in data_dir.glob("*.csv") if kw in f.name.lower())
+
+
+def _load_csv_by_prefix(data_dir: Path, keyword: str, col_name: str) -> pd.DataFrame:
+    """Find CSV whose filename contains keyword (case-insensitive), load first 2 columns."""
+    matches = _find_csvs_by_keyword(data_dir, keyword)
     if not matches:
-        raise FileNotFoundError(f"No CSV starting with '{prefix}' in {data_dir}")
+        raise FileNotFoundError(f"No CSV with '{keyword}' in filename in {data_dir}")
     path = matches[0]
     df = pd.read_csv(path, parse_dates=[0], usecols=[0, 1])
     df.columns = ["datetime", col_name]
     return df, path.name
 
 
-def _load_and_sum_gen_csvs(data_dir: Path, prefix: str):
-    """Load all gen*.csv files and sum generation at matching datetimes.
+def _load_and_sum_gen_csvs(data_dir: Path, keyword: str):
+    """Load all gen CSV files and sum generation at matching datetimes.
 
     Returns:
         df_summed: DataFrame with columns ["datetime", "generation_kw"]
         fnames: list of filenames loaded (length >= 1)
         per_file: list of dicts {fname, rows, start, end, nulls, diffs} for logging
     """
-    matches = sorted(data_dir.glob(f"{prefix}*.csv"))
+    matches = _find_csvs_by_keyword(data_dir, keyword)
     if not matches:
-        raise FileNotFoundError(f"No CSV starting with '{prefix}' in {data_dir}")
+        raise FileNotFoundError(f"No CSV with '{keyword}' in filename in {data_dir}")
 
     per_file = []
     frames = []
@@ -73,13 +114,13 @@ def _load_and_sum_gen_csvs(data_dir: Path, prefix: str):
 
 
 def load_raw_site(data_dir: str | Path) -> tuple:
-    """Load raw CSVs from a site folder using filename patterns.
+    """Load raw CSVs from a site folder using case-insensitive keyword matching.
 
-    Pattern rules:
-        Actual Temp-Ambient*.csv -> temperature_c
-        Actual Irradiance*.csv   -> irradiance_wm2
-        load*.csv                -> load_kw
-        gen*.csv                 -> generation_kw  (multiple files are summed)
+    Keyword rules (matched anywhere in filename, case-insensitive):
+        "temp"        -> temperature_c   (e.g. Temp-Ambient_*, Actual Temp-Ambient_*)
+        "irradiance"  -> irradiance_wm2  (e.g. Irradiance_*, Actual Irradiance_*)
+        "load"        -> load_kw         (e.g. load_*, load1_*)
+        "gen"         -> generation_kw   (e.g. gen_*, gen1_*, gen 1_*; multiple summed)
 
     Returns:
         raw: dict of {col_name: (DataFrame, filename_display_str)}
@@ -89,8 +130,8 @@ def load_raw_site(data_dir: str | Path) -> tuple:
     raw = {}
     gen_detail = []
     patterns = [
-        ("Actual Temp-Ambient", "temperature_c"),
-        ("Actual Irradiance", "irradiance_wm2"),
+        ("temp", "temperature_c"),
+        ("irradiance", "irradiance_wm2"),
         ("load", "load_kw"),
         ("gen", "generation_kw"),
     ]
@@ -356,19 +397,18 @@ def print_net_power(df_clean: pd.DataFrame):
 # 4. EDA Plots
 # ---------------------------------------------------------------------------
 
-def plot_missing_data(df_merged: pd.DataFrame, save_path: Path):
+def plot_missing_data(df_merged: pd.DataFrame, save_path: Path, site_name: str = ""):
     """Heatmap of missing data pattern."""
     fig, ax = plt.subplots(figsize=(14, 3))
     sns.heatmap(df_merged.isnull().T, cbar=False, yticklabels=True, cmap="Reds", ax=ax)
     ax.set_title("Missing Data Pattern (red = missing)")
     ax.set_xlabel("Time Index")
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
 def plot_before_after_cleaning(df_merged: pd.DataFrame, df_clean: pd.DataFrame,
-                                save_path: Path):
+                                save_path: Path, site_name: str = ""):
     """Compare before (with gaps) and after cleaning for each variable."""
     cols = [c for c in df_merged.columns if c in df_clean.columns]
     n_cols = len(cols)
@@ -381,25 +421,20 @@ def plot_before_after_cleaning(df_merged: pd.DataFrame, df_clean: pd.DataFrame,
 
     for i, col in enumerate(cols):
         color = colors.get(col, "gray")
-
-        # Before
         axes[i, 0].plot(df_merged.index, df_merged[col], color=color, lw=0.5)
         n_null = df_merged[col].isnull().sum()
         axes[i, 0].set_title(f"BEFORE - {col} (nulls: {n_null})")
         axes[i, 0].set_ylabel(col)
-
-        # After
         axes[i, 1].plot(df_clean.index, df_clean[col], color=color, lw=0.5)
         axes[i, 1].set_title(f"AFTER - {col} (rows: {len(df_clean)})")
         axes[i, 1].set_ylabel(col)
 
-    plt.suptitle("Before vs After Cleaning", fontsize=14, y=1.01)
+    plt.suptitle("Before vs After Cleaning", fontsize=14)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
-def plot_time_series(df_clean: pd.DataFrame, save_path: Path):
+def plot_time_series(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
     """4-panel time series of all variables."""
     cols = ["generation_kw", "irradiance_wm2", "temperature_c", "load_kw"]
     cols = [c for c in cols if c in df_clean.columns]
@@ -421,19 +456,17 @@ def plot_time_series(df_clean: pd.DataFrame, save_path: Path):
 
     axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
     plt.xticks(rotation=45)
-    plt.suptitle("All Variables Over Time", fontsize=14, y=1.01)
+    plt.suptitle("All Variables Over Time", fontsize=14)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
-def plot_one_week(df_clean: pd.DataFrame, save_path: Path):
+def plot_one_week(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
     """Zoom into one week of data."""
-    # Find a good week with data
-    if len(df_clean) < 7 * 96:  # less than 7 days at 15-min
+    if len(df_clean) < 7 * 96:
         return
 
-    mid = df_clean.index[len(df_clean) // 4]  # early part of data
+    mid = df_clean.index[len(df_clean) // 4]
     start = mid.normalize()
     end = start + pd.Timedelta(days=7)
     week = df_clean[start:end]
@@ -454,11 +487,10 @@ def plot_one_week(df_clean: pd.DataFrame, save_path: Path):
 
     plt.suptitle(f"One Week Detail ({start.date()} to {end.date()})", fontsize=14)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
-def plot_distributions(df_clean: pd.DataFrame, save_path: Path):
+def plot_distributions(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
     """Histogram of each variable."""
     cols = ["generation_kw", "irradiance_wm2", "temperature_c", "load_kw"]
     cols = [c for c in cols if c in df_clean.columns]
@@ -479,17 +511,15 @@ def plot_distributions(df_clean: pd.DataFrame, save_path: Path):
                     label=f"Mean={df_clean[col].mean():.1f}")
         ax.legend()
 
-    # Hide unused axes
     for i in range(len(cols), len(axes)):
         axes[i].set_visible(False)
 
     plt.suptitle("Distribution of Variables", fontsize=14)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
-def plot_boxplots(df_clean: pd.DataFrame, save_path: Path):
+def plot_boxplots(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
     """Box plots for outlier detection."""
     cols = ["generation_kw", "irradiance_wm2", "temperature_c", "load_kw"]
     cols = [c for c in cols if c in df_clean.columns]
@@ -506,11 +536,10 @@ def plot_boxplots(df_clean: pd.DataFrame, save_path: Path):
 
     plt.suptitle("Box Plots - Outlier Detection", fontsize=14)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
-def plot_correlation(df_clean: pd.DataFrame, save_path: Path):
+def plot_correlation(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
     """Correlation heatmap."""
     corr = df_clean.corr()
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -518,11 +547,10 @@ def plot_correlation(df_clean: pd.DataFrame, save_path: Path):
                 square=True, linewidths=1, ax=ax)
     ax.set_title("Correlation Matrix")
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
-def plot_scatter_vs_generation(df_clean: pd.DataFrame, save_path: Path):
+def plot_scatter_vs_generation(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
     """Scatter plots of generation vs each feature."""
     targets = ["irradiance_wm2", "temperature_c", "load_kw"]
     targets = [c for c in targets if c in df_clean.columns]
@@ -546,11 +574,10 @@ def plot_scatter_vs_generation(df_clean: pd.DataFrame, save_path: Path):
 
     plt.suptitle("Generation vs Features", fontsize=14)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
-def plot_hourly_patterns(df_clean: pd.DataFrame, save_path: Path):
+def plot_hourly_patterns(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
     """Hourly average patterns with std band."""
     df = df_clean.copy()
     df["hour"] = df.index.hour
@@ -581,11 +608,10 @@ def plot_hourly_patterns(df_clean: pd.DataFrame, save_path: Path):
 
     plt.suptitle("Hourly Patterns (mean ± 1 std)", fontsize=14)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
-def plot_monthly_trends(df_clean: pd.DataFrame, save_path: Path):
+def plot_monthly_trends(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
     """Monthly bar charts."""
     df = df_clean.copy()
     df["month"] = df.index.month
@@ -613,12 +639,11 @@ def plot_monthly_trends(df_clean: pd.DataFrame, save_path: Path):
 
     plt.suptitle("Monthly Trends", fontsize=14)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
-def plot_efficiency(df_clean: pd.DataFrame, save_path: Path):
-    """Generation efficiency analysis (daytime only)."""
+def plot_efficiency(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
+    """Efficiency (Gen/Irr) over time with rolling mean, and vs temperature."""
     if "irradiance_wm2" not in df_clean.columns or "generation_kw" not in df_clean.columns:
         return
 
@@ -627,73 +652,71 @@ def plot_efficiency(df_clean: pd.DataFrame, save_path: Path):
         return
 
     daytime["efficiency"] = daytime["generation_kw"] / daytime["irradiance_wm2"]
+    roll = daytime["efficiency"].rolling(96, min_periods=10).mean()
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 
-    axes[0].hist(daytime["efficiency"], bins=80, color="green", alpha=0.7,
-                 edgecolor="black", linewidth=0.3)
-    axes[0].set_title("Generation Efficiency (Gen/Irradiance) during daytime")
-    axes[0].set_xlabel("Efficiency (kW per W/m²)")
+    axes[0].scatter(daytime.index, daytime["efficiency"],
+                    s=1, alpha=0.2, color="green", label="Efficiency")
+    axes[0].plot(daytime.index, roll, color="darkgreen", lw=1.5,
+                 label="Rolling mean (1 day)")
+    axes[0].xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    axes[0].set_title("Generation Efficiency Over Time (daytime only)")
+    axes[0].set_ylabel("Efficiency (kW per W/m²)")
+    axes[0].legend()
 
     axes[1].scatter(daytime["temperature_c"], daytime["efficiency"],
-                    alpha=0.1, s=1, color="green")
+                    s=1, alpha=0.1, color="green")
     axes[1].set_title("Efficiency vs Temperature")
     axes[1].set_xlabel("Temperature (°C)")
     axes[1].set_ylabel("Efficiency")
 
+    plt.suptitle("Efficiency Analysis", fontsize=14)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
     print(f"\n  Daytime samples (irradiance > 10): {len(daytime)}")
-    print(f"  Efficiency stats:")
-    print(f"    Mean:   {daytime['efficiency'].mean():.4f}")
-    print(f"    Std:    {daytime['efficiency'].std():.4f}")
-    print(f"    Median: {daytime['efficiency'].median():.4f}")
+    print(f"  Efficiency — Mean: {daytime['efficiency'].mean():.4f}  "
+          f"Std: {daytime['efficiency'].std():.4f}  "
+          f"Median: {daytime['efficiency'].median():.4f}")
 
 
 def plot_anomaly_indicators(df_clean: pd.DataFrame, anomalies: dict,
-                             save_path: Path):
-    """Scatter plot highlighting 5 anomaly categories with distinct colors."""
-    if "irradiance_wm2" not in df_clean.columns or "generation_kw" not in df_clean.columns:
+                             save_path: Path, site_name: str = ""):
+    """Time-series of generation with 5 anomaly categories overlaid."""
+    if "generation_kw" not in df_clean.columns:
         return
 
     CATEGORY_STYLE = {
-        "High Irr / Low Gen":   {"color": "red",       "marker": "o"},
-        "Sudden Drop":          {"color": "magenta",    "marker": "v"},
-        "Efficiency Decline":   {"color": "orange",     "marker": "s"},
-        "Gen Spike":            {"color": "lime",       "marker": "^"},
-        "Gen / Zero Irr":       {"color": "dodgerblue", "marker": "D"},
+        "High Irr / Low Gen":   {"color": "red",       "marker": "o", "zorder": 5},
+        "Sudden Drop":          {"color": "magenta",    "marker": "v", "zorder": 6},
+        "Efficiency Decline":   {"color": "orange",     "marker": "s", "zorder": 4},
+        "Gen Spike":            {"color": "lime",       "marker": "^", "zorder": 7},
+        "Gen / Zero Irr":       {"color": "dodgerblue", "marker": "D", "zorder": 8},
     }
 
-    fig, ax = plt.subplots(figsize=(16, 7))
+    fig, ax = plt.subplots(figsize=(18, 5))
+    ax.plot(df_clean.index, df_clean["generation_kw"],
+            color="gray", lw=0.4, alpha=0.6, label="Generation (kW)")
 
-    # Background: all normal points
-    ax.scatter(df_clean["irradiance_wm2"], df_clean["generation_kw"],
-               alpha=0.05, s=1, color="gray", label="Normal")
-
-    # Overlay each anomaly category
     for name, adf in anomalies.items():
         if len(adf) == 0:
             continue
-        style = CATEGORY_STYLE.get(name, {"color": "black", "marker": "x"})
-        ax.scatter(
-            adf["irradiance_wm2"], adf["generation_kw"],
-            alpha=0.6, s=18, edgecolors="black", linewidths=0.3,
-            color=style["color"], marker=style["marker"],
-            label=f"{name} ({len(adf):,})",
-        )
+        style = CATEGORY_STYLE.get(name, {"color": "black", "marker": "x", "zorder": 5})
+        ax.scatter(adf.index, adf["generation_kw"],
+                   s=18, alpha=0.7, color=style["color"],
+                   marker=style["marker"], edgecolors="black", linewidths=0.3,
+                   zorder=style["zorder"], label=f"{name} ({len(adf):,})")
 
-    ax.set_xlabel("Irradiance (W/m²)")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
     ax.set_ylabel("Generation (kW)")
-    ax.set_title("Potential Anomaly Points by Category")
-    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
+    ax.set_title("Anomaly Indicators Over Time")
+    ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
 
 
-def plot_net_power(df_clean: pd.DataFrame, save_path: Path):
+def plot_net_power(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
     """Net power (generation - load) with surplus/deficit."""
     if "generation_kw" not in df_clean.columns or "load_kw" not in df_clean.columns:
         return
@@ -709,8 +732,259 @@ def plot_net_power(df_clean: pd.DataFrame, save_path: Path):
     ax.set_title("Net Power (Generation - Load): Surplus vs Deficit")
     ax.legend()
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    _save(fig, save_path, site_name=site_name)
+
+
+def plot_daily_hourly_lines(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
+    """Hourly mean per calendar day — one line per day, colored by day order."""
+    cols = [c for c in ["generation_kw", "irradiance_wm2", "temperature_c", "load_kw"]
+            if c in df_clean.columns]
+    if not cols:
+        return
+
+    df = df_clean.copy()
+    df["date"] = df.index.date
+    df["hour"] = df.index.hour
+    daily_hourly = df.groupby(["date", "hour"])[cols].mean()
+
+    dates = sorted(df["date"].unique())
+    n_dates = len(dates)
+    cmap = plt.cm.viridis
+    colors_list = [cmap(i / max(n_dates - 1, 1)) for i in range(n_dates)]
+
+    n = len(cols)
+    rows = math.ceil(n / 2)
+    fig, axes = plt.subplots(rows, 2, figsize=(16, 4 * rows))
+    axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
+
+    date_level = daily_hourly.index.get_level_values("date")
+    for ax, col in zip(axes, cols):
+        for i, date in enumerate(dates):
+            if date in date_level:
+                series = daily_hourly.xs(date, level="date")[col]
+                ax.plot(series.index, series.values,
+                        color=colors_list[i], lw=0.6, alpha=0.5)
+        ax.set_title(f"Daily Hourly Pattern — {VAR_TITLES.get(col, col)}")
+        ax.set_xlabel("Hour of Day")
+        ax.set_ylabel(col)
+        ax.set_xticks(range(0, 24, 2))
+
+    for i in range(len(cols), len(axes)):
+        axes[i].set_visible(False)
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0, n_dates))
+    sm.set_array([])
+    plt.suptitle("Daily Hourly Patterns (each line = one day)", fontsize=14)
+    plt.tight_layout()
+    fig.subplots_adjust(right=0.88)
+    cax = fig.add_axes([0.90, 0.15, 0.02, 0.70])
+    fig.colorbar(sm, cax=cax, label="Day index")
+    _save(fig, save_path, site_name=site_name)
+
+
+def plot_daily_hourly_boxplot(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
+    """Box plots of hourly daily-mean distribution across all days."""
+    cols = [c for c in ["generation_kw", "irradiance_wm2", "temperature_c", "load_kw"]
+            if c in df_clean.columns]
+    if not cols:
+        return
+
+    df = df_clean.copy()
+    df["date"] = df.index.date
+    df["hour"] = df.index.hour
+    daily_hourly = df.groupby(["date", "hour"])[cols].mean()
+    hour_level = daily_hourly.index.get_level_values("hour")
+
+    n = len(cols)
+    rows = math.ceil(n / 2)
+    fig, axes = plt.subplots(rows, 2, figsize=(16, 4 * rows))
+    axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
+
+    for ax, col in zip(axes, cols):
+        data_by_hour = [
+            daily_hourly.xs(h, level="hour")[col].dropna().values
+            for h in range(24) if h in hour_level
+        ]
+        ax.boxplot(data_by_hour, positions=range(len(data_by_hour)),
+                   showfliers=False, patch_artist=True,
+                   boxprops=dict(facecolor=VAR_COLORS.get(col, "gray"), alpha=0.5),
+                   medianprops=dict(color="black", lw=1.5))
+        ax.set_title(f"Hourly Distribution — {VAR_TITLES.get(col, col)}")
+        ax.set_xlabel("Hour of Day")
+        ax.set_ylabel(col)
+        ax.set_xticks(range(0, 24))
+
+    for i in range(len(cols), len(axes)):
+        axes[i].set_visible(False)
+
+    plt.suptitle("Distribution of Hourly Daily Averages", fontsize=14)
+    plt.tight_layout()
+    _save(fig, save_path, site_name=site_name)
+
+
+def plot_calendar_heatmap_hourly(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
+    """Heatmap: weekday × hour mean for each variable."""
+    cols = [c for c in ["generation_kw", "irradiance_wm2", "temperature_c", "load_kw"]
+            if c in df_clean.columns]
+    if not cols:
+        return
+
+    df = df_clean.copy()
+    df["dow"] = df.index.dayofweek
+    df["hour"] = df.index.hour
+    DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    n = len(cols)
+    fig, axes = plt.subplots(n, 1, figsize=(18, 3 * n))
+    if n == 1:
+        axes = [axes]
+
+    for ax, col in zip(axes, cols):
+        pivot = df.pivot_table(index="dow", columns="hour",
+                               values=col, aggfunc="mean")
+        pivot.index = [DOW_LABELS[i] for i in pivot.index]
+        sns.heatmap(pivot, ax=ax, cmap="YlOrRd", cbar=True,
+                    linewidths=0.3, linecolor="white",
+                    xticklabels=list(range(24)))
+        ax.set_title(f"Weekday × Hour — {VAR_TITLES.get(col, col)}")
+        ax.set_xlabel("Hour of Day")
+        ax.set_ylabel("Day of Week")
+
+    plt.suptitle("Calendar Heatmap (Hourly Resolution)", fontsize=14)
+    plt.tight_layout()
+    _save(fig, save_path, site_name=site_name)
+
+
+def plot_calendar_heatmap_15min(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
+    """Heatmap: weekday × 15-min slot mean for each variable."""
+    cols = [c for c in ["generation_kw", "irradiance_wm2", "temperature_c", "load_kw"]
+            if c in df_clean.columns]
+    if not cols:
+        return
+
+    df = df_clean.copy()
+    df["dow"] = df.index.dayofweek
+    df["slot"] = df.index.hour * 4 + df.index.minute // 15
+    DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    x_ticks = list(range(0, 96, 4))
+    x_labels = [f"{h:02d}:00" for h in range(24)]
+
+    n = len(cols)
+    fig, axes = plt.subplots(n, 1, figsize=(22, 3 * n))
+    if n == 1:
+        axes = [axes]
+
+    for ax, col in zip(axes, cols):
+        pivot = df.pivot_table(index="dow", columns="slot",
+                               values=col, aggfunc="mean")
+        pivot.index = [DOW_LABELS[i] for i in pivot.index]
+        sns.heatmap(pivot, ax=ax, cmap="YlOrRd", cbar=True,
+                    linewidths=0, xticklabels=False)
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=8)
+        ax.set_title(f"Weekday × 15-min Slot — {VAR_TITLES.get(col, col)}")
+        ax.set_xlabel("Time of Day")
+        ax.set_ylabel("Day of Week")
+
+    plt.suptitle("Calendar Heatmap (15-min Resolution)", fontsize=14)
+    plt.tight_layout()
+    _save(fig, save_path, site_name=site_name)
+
+
+def plot_daily_15min_lines(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
+    """15-min mean per calendar day — one line per day, colored by day order."""
+    cols = [c for c in ["generation_kw", "irradiance_wm2", "temperature_c", "load_kw"]
+            if c in df_clean.columns]
+    if not cols:
+        return
+
+    df = df_clean.copy()
+    df["date"] = df.index.date
+    df["slot"] = df.index.hour * 4 + df.index.minute // 15
+    daily_slot = df.groupby(["date", "slot"])[cols].mean()
+
+    dates = sorted(df["date"].unique())
+    n_dates = len(dates)
+    cmap = plt.cm.viridis
+    colors_list = [cmap(i / max(n_dates - 1, 1)) for i in range(n_dates)]
+
+    x_ticks = list(range(0, 96, 4))
+    x_labels = [f"{h:02d}:00" for h in range(24)]
+
+    n = len(cols)
+    rows = math.ceil(n / 2)
+    fig, axes = plt.subplots(rows, 2, figsize=(18, 4 * rows))
+    axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
+
+    date_level = daily_slot.index.get_level_values("date")
+    for ax, col in zip(axes, cols):
+        for i, date in enumerate(dates):
+            if date in date_level:
+                series = daily_slot.xs(date, level="date")[col]
+                ax.plot(series.index, series.values,
+                        color=colors_list[i], lw=0.5, alpha=0.4)
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=8)
+        ax.set_title(f"Daily 15-min Pattern — {VAR_TITLES.get(col, col)}")
+        ax.set_ylabel(col)
+
+    for i in range(len(cols), len(axes)):
+        axes[i].set_visible(False)
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0, n_dates))
+    sm.set_array([])
+    plt.suptitle("Daily 15-min Patterns (each line = one day)", fontsize=14)
+    plt.tight_layout()
+    fig.subplots_adjust(right=0.88)
+    cax = fig.add_axes([0.90, 0.15, 0.02, 0.70])
+    fig.colorbar(sm, cax=cax, label="Day index")
+    _save(fig, save_path, site_name=site_name)
+
+
+def plot_daily_15min_boxplot(df_clean: pd.DataFrame, save_path: Path, site_name: str = ""):
+    """Box plots of 15-min-slot daily distribution across all days."""
+    cols = [c for c in ["generation_kw", "irradiance_wm2", "temperature_c", "load_kw"]
+            if c in df_clean.columns]
+    if not cols:
+        return
+
+    df = df_clean.copy()
+    df["date"] = df.index.date
+    df["slot"] = df.index.hour * 4 + df.index.minute // 15
+    daily_slot = df.groupby(["date", "slot"])[cols].mean()
+    slot_level = daily_slot.index.get_level_values("slot")
+    n_slots = slot_level.nunique()
+
+    x_ticks = list(range(0, n_slots, 4))
+    x_labels = [f"{h:02d}:00" for h in range(24)][:len(x_ticks)]
+
+    n = len(cols)
+    rows = math.ceil(n / 2)
+    fig, axes = plt.subplots(rows, 2, figsize=(18, 4 * rows))
+    axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
+
+    for ax, col in zip(axes, cols):
+        data_by_slot = [
+            daily_slot.xs(s, level="slot")[col].dropna().values
+            for s in range(n_slots) if s in slot_level
+        ]
+        ax.boxplot(data_by_slot, positions=range(len(data_by_slot)),
+                   showfliers=False, patch_artist=True,
+                   boxprops=dict(facecolor=VAR_COLORS.get(col, "gray"), alpha=0.5),
+                   medianprops=dict(color="black", lw=1.5),
+                   widths=0.6)
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=8)
+        ax.set_title(f"15-min Distribution — {VAR_TITLES.get(col, col)}")
+        ax.set_ylabel(col)
+
+    for i in range(len(cols), len(axes)):
+        axes[i].set_visible(False)
+
+    plt.suptitle("Distribution of Daily 15-min Averages", fontsize=14)
+    plt.tight_layout()
+    _save(fig, save_path, site_name=site_name)
 
 
 # ---------------------------------------------------------------------------
@@ -770,45 +1044,64 @@ def run_eda(data_dir: str, output_base: str = "outputs") -> tuple:
     # --- Plots ---
     print(f"\n  Generating EDA plots -> {eda_dir}")
 
-    plot_missing_data(df_merged, eda_dir / "missing_data_pattern.png")
-    print("    saved: missing_data_pattern.png")
+    sn = site_name  # shorthand for passing to all plot calls
 
-    plot_before_after_cleaning(df_merged, df_clean, eda_dir / "before_after_cleaning.png")
-    print("    saved: before_after_cleaning.png")
+    plot_missing_data(df_merged, eda_dir / "01_missing_data_pattern.png", site_name=sn)
+    print("    saved: 01_missing_data_pattern.png")
 
-    plot_time_series(df_clean, eda_dir / "time_series.png")
-    print("    saved: time_series.png")
+    plot_before_after_cleaning(df_merged, df_clean, eda_dir / "02_before_after_cleaning.png", site_name=sn)
+    print("    saved: 02_before_after_cleaning.png")
 
-    plot_one_week(df_clean, eda_dir / "one_week_detail.png")
-    print("    saved: one_week_detail.png")
+    plot_time_series(df_clean, eda_dir / "03_time_series.png", site_name=sn)
+    print("    saved: 03_time_series.png")
 
-    plot_distributions(df_clean, eda_dir / "distributions.png")
-    print("    saved: distributions.png")
+    plot_one_week(df_clean, eda_dir / "04_one_week_detail.png", site_name=sn)
+    print("    saved: 04_one_week_detail.png")
 
-    plot_boxplots(df_clean, eda_dir / "boxplots.png")
-    print("    saved: boxplots.png")
+    plot_distributions(df_clean, eda_dir / "05_distributions.png", site_name=sn)
+    print("    saved: 05_distributions.png")
 
-    plot_correlation(df_clean, eda_dir / "correlation_matrix.png")
-    print("    saved: correlation_matrix.png")
+    plot_boxplots(df_clean, eda_dir / "06_boxplots.png", site_name=sn)
+    print("    saved: 06_boxplots.png")
 
-    plot_scatter_vs_generation(df_clean, eda_dir / "scatter_vs_generation.png")
-    print("    saved: scatter_vs_generation.png")
+    plot_correlation(df_clean, eda_dir / "07_correlation_matrix.png", site_name=sn)
+    print("    saved: 07_correlation_matrix.png")
 
-    plot_hourly_patterns(df_clean, eda_dir / "hourly_patterns.png")
-    print("    saved: hourly_patterns.png")
+    plot_scatter_vs_generation(df_clean, eda_dir / "08_scatter_vs_generation.png", site_name=sn)
+    print("    saved: 08_scatter_vs_generation.png")
 
-    plot_monthly_trends(df_clean, eda_dir / "monthly_trends.png")
-    print("    saved: monthly_trends.png")
+    plot_hourly_patterns(df_clean, eda_dir / "09_hourly_patterns.png", site_name=sn)
+    print("    saved: 09_hourly_patterns.png")
 
-    plot_efficiency(df_clean, eda_dir / "efficiency_analysis.png")
-    print("    saved: efficiency_analysis.png")
+    plot_monthly_trends(df_clean, eda_dir / "10_monthly_trends.png", site_name=sn)
+    print("    saved: 10_monthly_trends.png")
 
-    plot_anomaly_indicators(df_clean, anomalies,
-                            eda_dir / "anomaly_indicators.png")
-    print("    saved: anomaly_indicators.png")
+    plot_efficiency(df_clean, eda_dir / "11_efficiency_analysis.png", site_name=sn)
+    print("    saved: 11_efficiency_analysis.png")
 
-    plot_net_power(df_clean, eda_dir / "net_power.png")
-    print("    saved: net_power.png")
+    plot_anomaly_indicators(df_clean, anomalies, eda_dir / "12_anomaly_indicators.png", site_name=sn)
+    print("    saved: 12_anomaly_indicators.png")
+
+    plot_net_power(df_clean, eda_dir / "13_net_power.png", site_name=sn)
+    print("    saved: 13_net_power.png")
+
+    plot_daily_hourly_lines(df_clean, eda_dir / "14_daily_hourly_lines.png", site_name=sn)
+    print("    saved: 14_daily_hourly_lines.png")
+
+    plot_daily_hourly_boxplot(df_clean, eda_dir / "15_daily_hourly_boxplot.png", site_name=sn)
+    print("    saved: 15_daily_hourly_boxplot.png")
+
+    plot_calendar_heatmap_hourly(df_clean, eda_dir / "16_calendar_heatmap_hourly.png", site_name=sn)
+    print("    saved: 16_calendar_heatmap_hourly.png")
+
+    plot_calendar_heatmap_15min(df_clean, eda_dir / "17_calendar_heatmap_15min.png", site_name=sn)
+    print("    saved: 17_calendar_heatmap_15min.png")
+
+    plot_daily_15min_lines(df_clean, eda_dir / "18_daily_15min_lines.png", site_name=sn)
+    print("    saved: 18_daily_15min_lines.png")
+
+    plot_daily_15min_boxplot(df_clean, eda_dir / "19_daily_15min_boxplot.png", site_name=sn)
+    print("    saved: 19_daily_15min_boxplot.png")
 
     # --- Save cleaned CSV ---
     df_clean.to_csv(cleaned_csv)

@@ -25,6 +25,7 @@ SolarPowerSystemsAnomalyDetection/
 |-- src/                            # Modular source code
 |   |-- config.py                   # All configurations (data, model, training, paths)
 |   |-- data.py                     # Data loading, cleaning, variable-length sequences
+|   |-- eda.py                      # EDA, cleaning, anomaly indicators, 12 EDA plots
 |   |-- trainer.py                  # PyTorch training loop with early stopping
 |   |-- evaluate.py                 # Metrics, 3-sigma anomaly detection, ensemble voting
 |   |-- visualize.py                # All plotting functions (auto-save to output dirs)
@@ -36,29 +37,32 @@ SolarPowerSystemsAnomalyDetection/
 |       |-- ml_models.py            # Isolation Forest, Random Forest (scikit-learn)
 |
 |-- notebooks/                      # Jupyter notebooks (EDA & initial experiments)
-|   |-- 01_EDA.ipynb                # Exploratory Data Analysis
-|   |-- 02_training_anomaly_detection.ipynb   # Original training notebook
+|   |-- 01_EDA.ipynb
+|   |-- 02_training_anomaly_detection.ipynb
 |
-|-- datasets/
-|   |-- site_1/                     # Raw CSV files (per site)
+|-- datasets/                       # One subfolder per site
+|   |-- site_1/
 |   |   |-- gen_337_*.csv           # Solar generation (kW)
 |   |   |-- Irradiance_339_*.csv    # Solar irradiance (W/m2)
 |   |   |-- Temp-Ambient_340_*.csv  # Ambient temperature (C)
 |   |   |-- load_338_*.csv          # Power consumption (kW)
-|   |-- site_1_cleaned.csv          # Merged & cleaned data (auto-generated)
+|   |-- S1/                         # Sites with multiple generators
+|   |   |-- gen 1_397_*.csv         # Generator 1 (summed with others automatically)
+|   |   |-- gen 2_430_*.csv         # Generator 2
+|   |   |-- ...
+|   |-- site_1_cleaned.csv          # Merged & cleaned data (auto-generated per site)
 |
 |-- outputs/                        # Auto-generated per training run
-|   |-- {ModelName}/
-|   |   |-- model/                  # Saved model weights (.pt / .joblib)
-|   |   |-- loss/                   # Loss history (.json, .csv, training_loss.png)
-|   |   |-- plots/                  # Anomaly detection, prediction, error distribution
-|   |-- Ensemble/plots/             # Ensemble voting results
-|   |-- Comparison/                 # Cross-model comparison (CSV, PNG, configs)
+|   |-- {trial_name}/
+|       |-- {ModelName}/{site_name}/
+|       |   |-- model/              # Saved weights (.pt / .joblib)
+|       |   |-- loss/               # Loss history (.json, .csv, .png)
+|       |   |-- plots/              # Anomaly, prediction, error plots
+|       |-- Ensemble/{site_name}/plots/
+|       |-- Comparison/{site_name}/
+|       |-- data_EDA/{site_name}/   # 12 EDA plots + cleaning summary
 |
-|-- Result.md                       # Detailed results summary
-|-- Presentation_Summary.md         # Slide-by-slide presentation content
-|-- Solar_Anomaly_Detection_Presentation.pptx      # PowerPoint (English)
-|-- Solar_Anomaly_Detection_Presentation_TH.pptx   # PowerPoint (Thai)
+|-- documents/                      # Technical documentation
 |-- References/                     # Research papers & reference project
 ```
 
@@ -72,15 +76,21 @@ pip install -r requirements.txt
 
 **Requirements:** Python 3.10+, PyTorch 2.0+, scikit-learn, pandas, matplotlib, seaborn
 
-### 2. Run Training (Default)
+### 2. Run Training — All Sites (Default)
 
 ```bash
 python run_training.py
 ```
 
-This trains all 6 models with default settings: input=4 timesteps (1 hour), output=1 timestep (15 min).
+Scans all subfolders in `datasets/` and trains all 6 models for each site in sequence. Each site's results are saved to `outputs/{trial}/{model}/{site_name}/`.
 
-### 3. Custom Timesteps
+### 3. Run Training — Single Site
+
+```bash
+python run_training.py --data-dir datasets/site_1
+```
+
+### 4. Custom Timesteps
 
 The pipeline supports **variable input/output window sizes**:
 
@@ -92,22 +102,17 @@ python run_training.py --input-steps 6 --output-steps 2
 python run_training.py --input-steps 8 --output-steps 3
 ```
 
-### 4. Select Specific Models
+### 5. Select Specific Models
 
 ```bash
-# Only LSTM and Transformer
 python run_training.py --models LSTM Transformer
-
-# Only ML models
 python run_training.py --models Isolation_Forest Random_Forest
-
-# Single model
 python run_training.py --models CNN_LSTM
 ```
 
 **Available models:** `LSTM`, `CNN_LSTM`, `LSTM_Autoencoder`, `Transformer`, `Isolation_Forest`, `Random_Forest`
 
-### 5. Tune Hyperparameters
+### 6. Tune Hyperparameters
 
 ```bash
 python run_training.py \
@@ -118,23 +123,23 @@ python run_training.py \
     --sigma 2.5
 ```
 
-### 6. Full CLI Reference
+### 7. Full CLI Reference
 
 ```
-python run_training.py --help
-
 options:
-  --input-steps N     Input timesteps (default: 4 = 1 hour)
-  --output-steps N    Output timesteps to predict (default: 1 = 15 min)
-  --models [M ...]    Models to train (default: all)
-  --epochs N          Training epochs (default: 100)
-  --batch-size N      Batch size (default: 32)
-  --lr F              Learning rate (default: 0.001)
-  --patience N        Early stopping patience (default: 15)
-  --sigma F           Anomaly threshold sigma (default: 3.0)
-  --data-dir PATH     Data directory (default: datasets/site_1)
-  --output-dir PATH   Output directory (default: outputs)
-  --seed N            Random seed (default: 42)
+  --input-steps N       Input timesteps (default: 4 = 1 hour)
+  --output-steps N      Output timesteps to predict (default: 1 = 15 min)
+  --models [M ...]      Models to train (default: all)
+  --epochs N            Training epochs (default: 100)
+  --batch-size N        Batch size (default: 32)
+  --lr F                Learning rate (default: 0.001)
+  --patience N          Early stopping patience (default: 15)
+  --sigma F             Anomaly threshold sigma (default: 3.0)
+  --trial-name NAME     Output folder name (default: auto run_1, run_2, ...)
+  --datasets-dir PATH   Root folder of site subfolders (default: datasets/)
+  --data-dir PATH       Single site folder — overrides --datasets-dir
+  --output-dir PATH     Base output directory (default: outputs)
+  --seed N              Random seed (default: 42)
 ```
 
 ## Methodology
@@ -185,53 +190,62 @@ Time: [t-5] [t-4] [t-3] [t-2] [t-1] [t]  |  [t+1] [t+2]
 
 ## Output Structure
 
-After training, the `outputs/` directory contains:
+After training, the `outputs/` directory contains one subfolder per trial, then per model, then per site:
 
 ```
-outputs/
-|-- LSTM/
+outputs/{trial_name}/
+|-- LSTM/{site_name}/
 |   |-- model/LSTM.pt                    # Saved PyTorch weights
 |   |-- loss/
-|   |   |-- loss_history.json            # Train & val loss per epoch
-|   |   |-- loss_history.csv             # Same in CSV format
-|   |   |-- training_loss.png            # Loss curve plot
+|   |   |-- loss_history.json
+|   |   |-- loss_history.csv
+|   |   |-- training_loss.png
 |   |-- plots/
-|       |-- anomaly_detection.png        # 3-panel: pred vs actual, MAE, anomalies
-|       |-- prediction_vs_actual.png     # Predicted vs actual generation
-|       |-- error_distribution.png       # Error histogram with threshold
+|       |-- anomaly_detection.png
+|       |-- prediction_vs_actual.png
+|       |-- error_distribution.png
 |
-|-- CNN_LSTM/model/ loss/ plots/         # Same structure
-|-- LSTM_Autoencoder/model/ loss/ plots/ # Reconstruction error plots
-|-- Transformer/model/ loss/ plots/
-|-- Isolation_Forest/model/ plots/       # No loss (not DL)
-|-- Random_Forest/model/ plots/
+|-- CNN_LSTM/{site_name}/  LSTM_Autoencoder/{site_name}/  ...  (same structure)
 |
-|-- Ensemble/plots/
-|   |-- ensemble_anomalies.png           # Majority vote results
-|   |-- ensemble_results.json            # Vote distribution
+|-- Ensemble/{site_name}/plots/
+|   |-- ensemble_anomalies.png
+|   |-- ensemble_results.json
 |
-|-- Comparison/
-    |-- model_comparison.csv             # RMSE, MAE, R2 per model
-    |-- model_comparison.png             # Bar chart comparison
-    |-- anomaly_comparison.png           # Anomaly count per model
-    |-- anomaly_counts.json
-    |-- run_config.json                  # Hyperparameters used
-    |-- scaler.joblib                    # Fitted scaler (for inference)
-    |-- train_test_split.png
+|-- Comparison/{site_name}/
+|   |-- model_comparison.csv             # RMSE, MAE, R2 per model
+|   |-- model_comparison.png
+|   |-- anomaly_comparison.png
+|   |-- anomaly_counts.json
+|   |-- run_config.json                  # Hyperparameters + site_name
+|   |-- scaler.joblib                    # Fitted scaler (for inference)
+|   |-- train_test_split.png
+|
+|-- data_EDA/{site_name}/
+    |-- time_series.png
+    |-- missing_data_pattern.png
+    |-- before_after_cleaning.png
+    |-- distributions.png  boxplots.png  correlation_matrix.png
+    |-- hourly_patterns.png  monthly_trends.png
+    |-- scatter_vs_generation.png
+    |-- efficiency_analysis.png
+    |-- anomaly_indicators.png
+    |-- net_power.png
 ```
 
 ## Data
 
 ### Input Format (Per Site)
 
-Each site has 4 CSV files with columns `date/time` and a value column:
+Each site folder contains CSV files with columns `date/time` and a value column. Files are matched by **case-insensitive keyword** in the filename:
 
-| File | Variable | Unit | Resolution |
-|------|----------|------|------------|
-| `gen_*` | Solar generation | kW | ~1 min |
-| `Irradiance_*` | Solar irradiance | W/m2 | ~1 min |
-| `Temp-Ambient_*` | Ambient temperature | C | ~1 min |
-| `load_*` | Power consumption | kW | 15 min |
+| Keyword | Variable | Unit | Example filenames |
+|---------|----------|------|-------------------|
+| `gen` | Solar generation | kW | `gen_337_*.csv`, `gen 1_397_*.csv` |
+| `irradiance` | Solar irradiance | W/m2 | `Irradiance_339_*.csv`, `Actual Irradiance_*.csv` |
+| `temp` | Ambient temperature | C | `Temp-Ambient_340_*.csv`, `Actual Temp-Ambient_*.csv` |
+| `load` | Power consumption | kW | `load_338_*.csv`, `load1_*.csv` |
+
+**Multiple generation files** (e.g. `gen 1_*.csv`, `gen 2_*.csv`, `gen 3_*.csv`) are automatically detected and **summed** at each timestamp into a single `generation_kw` column.
 
 ### Preprocessing Pipeline
 
@@ -240,13 +254,28 @@ Each site has 4 CSV files with columns `date/time` and a value column:
 3. **Forward-fill** gaps up to 1 hour
 4. **Interpolate** remaining short gaps
 5. **Drop** rows with unrecoverable gaps
+6. **Zero** generation readings where irradiance ≤ 0 (physical constraint)
+7. **Save** cleaned CSV to `datasets/{site_name}_cleaned.csv`
 
 ### Adding New Sites
 
-Place CSV files in `datasets/site_N/` and run:
+Place a new folder under `datasets/` with the required CSV files:
+
+```
+datasets/
+|-- my_new_site/
+    |-- gen_*.csv
+    |-- Irradiance_*.csv  (or Actual Irradiance_*.csv)
+    |-- Temp-Ambient_*.csv  (or Actual Temp-Ambient_*.csv)
+    |-- load_*.csv
+```
+
+Then run `python run_training.py` — the new site is picked up automatically.
+
+To train only the new site:
 
 ```bash
-python run_training.py --data-dir datasets/site_N --output-dir outputs_site_N
+python run_training.py --data-dir datasets/my_new_site
 ```
 
 ## Using Saved Models for Inference
@@ -254,16 +283,18 @@ python run_training.py --data-dir datasets/site_N --output-dir outputs_site_N
 ```python
 import torch
 import joblib
-from src.config import SequenceConfig
 from src.data import create_sequences
 from src.models import LSTMModel
 
-# Load config and scaler
-scaler = joblib.load("outputs/Comparison/scaler.joblib")
+trial = "run_1"
+site  = "site_1"
+
+# Load scaler saved during training
+scaler = joblib.load(f"outputs/{trial}/Comparison/{site}/scaler.joblib")
 
 # Load model
 model = LSTMModel(n_features=3, output_steps=1)
-model.load_state_dict(torch.load("outputs/LSTM/model/LSTM.pt"))
+model.load_state_dict(torch.load(f"outputs/{trial}/LSTM/{site}/model/LSTM.pt"))
 model.eval()
 
 # Prepare new data
@@ -274,6 +305,7 @@ X_tensor = torch.FloatTensor(X)
 # Predict
 with torch.no_grad():
     predictions = model(X_tensor).numpy()
+    predictions_actual = scaler.inverse_transform(predictions)
 ```
 
 ## References
