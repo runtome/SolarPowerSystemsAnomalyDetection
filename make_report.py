@@ -46,6 +46,14 @@ COLOR_GRAY_TEXT  = RGBColor(0x77, 0x77, 0x77)
 DL_MODELS  = ["LSTM", "CNN_LSTM", "LSTM_Autoencoder", "Transformer"]
 ALL_MODELS = ["Isolation_Forest", "Random_Forest"] + DL_MODELS
 
+INDICATOR_CATEGORIES = [
+    "High Irr / Low Gen",
+    "Sudden Drop",
+    "Efficiency Decline",
+    "Gen Spike",
+    "Gen / Zero Irr",
+]
+
 
 # ---------------------------------------------------------------------------
 # Low-level helpers
@@ -334,11 +342,108 @@ def load_ensemble_results(output_dir: Path, site: str) -> dict:
     return json.loads(p.read_text()) if p.exists() else {}
 
 
+def parse_log_anomaly_indicators(log_path: Path,
+                                  title: str = "Visual Inspection") -> dict:
+    """
+    Parse 'Anomaly Indicators ({title})' blocks per site from log.
+    Returns {site_name: {category: int, ...}, ...}.
+    """
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+
+    site_re = re.compile(r"EDA Pipeline - (\S+)")
+    site_positions = [(m.start(), m.group(1)) for m in site_re.finditer(text)]
+
+    block_re = re.compile(
+        rf"Anomaly Indicators \({re.escape(title)}\)\n"
+        r"={10,}\n"
+        r"((?:[ \t]+[^\n]+: \d+ samples\n)+)",
+        re.MULTILINE,
+    )
+
+    result = {}
+    for bm in block_re.finditer(text):
+        block_start = bm.start()
+        site_name = None
+        for pos, name in site_positions:
+            if pos < block_start:
+                site_name = name
+        if site_name is None:
+            continue
+        counts = {}
+        for line in bm.group(1).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            m = re.match(r"(.+?)\s*:\s*(\d+)\s*samples?", line)
+            if m:
+                counts[m.group(1).strip()] = int(m.group(2))
+        result[site_name] = counts
+
+    return result
+
+
+def make_anomaly_indicators_chart(data: dict, save_path: Path):
+    """Grouped bar chart comparing 5 anomaly indicator categories across sites."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    SHORT_LABELS = {
+        "High Irr / Low Gen": "High Irr\n/ Low Gen",
+        "Sudden Drop":        "Sudden\nDrop",
+        "Efficiency Decline": "Efficiency\nDecline",
+        "Gen Spike":          "Gen\nSpike",
+        "Gen / Zero Irr":     "Gen /\nZero Irr",
+    }
+
+    sites   = list(data.keys())
+    n_sites = len(sites)
+    n_cats  = len(INDICATOR_CATEGORIES)
+
+    x       = np.arange(n_cats)
+    bar_w   = 0.18
+    offsets = np.linspace(-(n_sites - 1) / 2, (n_sites - 1) / 2, n_sites) * bar_w
+    cmap    = plt.cm.tab10
+    colors  = [cmap(i / max(n_sites - 1, 1)) for i in range(n_sites)]
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    for i, (site, color) in enumerate(zip(sites, colors)):
+        values = [data[site].get(cat, 0) for cat in INDICATOR_CATEGORIES]
+        bars = ax.bar(x + offsets[i], values, width=bar_w,
+                      label=site, color=color, edgecolor="white", linewidth=0.5)
+        for bar, val in zip(bars, values):
+            if val > 0:
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                        bar.get_height() + 2, str(val),
+                        ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([SHORT_LABELS[c] for c in INDICATOR_CATEGORIES], fontsize=11)
+    ax.set_ylabel("Sample Count", fontsize=12)
+    ax.set_title("Anomaly Indicators (Visual Inspection) — Cross-Site Comparison",
+                 fontsize=14, fontweight="bold")
+    ax.legend(title="Site", fontsize=10, title_fontsize=11)
+    ax.set_ylim(bottom=0)
+    ax.yaxis.grid(True, linestyle="--", alpha=0.5)
+    ax.set_axisbelow(True)
+
+    plt.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def auto_detect_log(output_dir: Path) -> Path | None:
+    """Find the log file for this trial in the logs/ directory."""
+    trial_name = output_dir.name
+    candidates = list(Path("logs").glob(f"{trial_name}_*.log"))
+    return candidates[0] if candidates else None
+
+
 # ---------------------------------------------------------------------------
 # Report builder
 # ---------------------------------------------------------------------------
 
-def build_report(output_dir: Path, output_pptx: Path):
+def build_report(output_dir: Path, output_pptx: Path, log_path: Path | None = None):
     sites = sorted([d.name for d in (output_dir / "Comparison").iterdir() if d.is_dir()])
     if not sites:
         raise FileNotFoundError(f"No sites found under {output_dir}/Comparison/")
@@ -395,6 +500,36 @@ def build_report(output_dir: Path, output_pptx: Path):
         ["Site", "Best Model", "RMSE", "MAE", "R²", "Ensemble Anomalies"],
         summary_rows,
         subtitle="Best model = highest R² on test set")
+
+    # ── Slide 04: Anomaly Indicators cross-site comparison ───────────────────
+    _log = log_path or auto_detect_log(output_dir)
+    if _log and _log.exists():
+        indicator_data = parse_log_anomaly_indicators(_log)
+        if indicator_data:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            make_anomaly_indicators_chart(indicator_data, tmp_path)
+            add_single_image_slide(prs,
+                "Anomaly Indicators (Visual Inspection) — Cross-Site Comparison",
+                tmp_path,
+                subtitle="EDA phase: raw pattern detection before model training")
+            tmp_path.unlink(missing_ok=True)
+    else:
+        print("  [skip] No log file found — anomaly indicators slide omitted.")
+
+    # ── Slide 05: Anomaly Indicators (After Cleaning) cross-site ─────────────
+    if _log and _log.exists():
+        after_data = parse_log_anomaly_indicators(_log, title="After Cleaning")
+        if after_data:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp2:
+                tmp2_path = Path(tmp2.name)
+            make_anomaly_indicators_chart(after_data, tmp2_path)
+            add_single_image_slide(prs,
+                "Anomaly Indicators (After Cleaning) — Cross-Site Comparison",
+                tmp2_path,
+                subtitle="EDA phase: anomaly patterns remaining after gap-fill & zero-out")
+            tmp2_path.unlink(missing_ok=True)
 
     # ── Per-site slides ──────────────────────────────────────────────────────
     for site in sites:
@@ -526,6 +661,9 @@ def main():
                         help="Trial output directory (default: auto-detect latest run_N)")
     parser.add_argument("--output-pptx", default=None,
                         help="Output file path (default: {output_dir}/{trial}_summary_report.pptx)")
+    parser.add_argument("--log-file", default=None,
+                        help="Training log file for anomaly indicators chart "
+                             "(default: auto-detect from logs/{trial_name}_*.log)")
     args = parser.parse_args()
 
     if args.output_dir is None:
@@ -541,8 +679,9 @@ def main():
     output_pptx = Path(args.output_pptx) if args.output_pptx \
         else output_dir / f"{trial_name}_summary_report.pptx"
 
+    log_path = Path(args.log_file) if args.log_file else None
     print(f"Building report for: {output_dir}")
-    build_report(output_dir, output_pptx)
+    build_report(output_dir, output_pptx, log_path=log_path)
 
 
 if __name__ == "__main__":

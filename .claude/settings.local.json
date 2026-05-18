@@ -22,7 +22,8 @@
       "Bash(findstr /v \"UserWarning\\\\|tight_layout\\\\|Axes\")",
       "Bash(Select-Object FullName)",
       "Bash(Format-Table -AutoSize)",
-      "Bash(dir *)"
+      "Bash(dir *)",
+      "Bash(grep *)"
     ]
   }
 }

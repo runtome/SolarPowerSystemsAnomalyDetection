@@ -372,10 +372,10 @@ def detect_anomaly_categories(df: pd.DataFrame, gen_no_sun: pd.DataFrame) -> dic
     return anomalies
 
 
-def print_anomaly_indicators(anomalies: dict):
+def print_anomaly_indicators(anomalies: dict, title: str = "Visual Inspection"):
     """Print anomaly category counts."""
     print("\n" + "=" * 60)
-    print("  Anomaly Indicators (Visual Inspection)")
+    print(f"  Anomaly Indicators ({title})")
     print("=" * 60)
     for name, adf in anomalies.items():
         print(f"    {name:30s}: {len(adf):,} samples")
@@ -1026,6 +1026,13 @@ def run_eda(data_dir: str, output_base: str = "outputs") -> tuple:
     df_merged, df_clean = clean_and_merge(raw)
     print_merge_summary(df_merged, df_clean)
 
+    # --- Anomaly indicators BEFORE cleaning (on merged raw data, NaN rows dropped) ---
+    df_merged_valid = df_merged.dropna(
+        subset=["irradiance_wm2", "temperature_c", "generation_kw"])
+    gen_no_sun_raw = detect_no_sun_generation(df_merged_valid)
+    anomalies_raw = detect_anomaly_categories(df_merged_valid, gen_no_sun_raw)
+    print_anomaly_indicators(anomalies_raw, title="Visual Inspection")
+
     # --- Detect anomalies BEFORE zeroing (for visualization) ---
     gen_no_sun = detect_no_sun_generation(df_clean)
 
@@ -1036,9 +1043,9 @@ def run_eda(data_dir: str, output_base: str = "outputs") -> tuple:
     print_statistics(df_clean)
     print_correlation(df_clean)
 
-    # --- Anomaly indicators (5 categories) ---
+    # --- Anomaly indicators AFTER cleaning ---
     anomalies = detect_anomaly_categories(df_clean, gen_no_sun)
-    print_anomaly_indicators(anomalies)
+    print_anomaly_indicators(anomalies, title="After Cleaning")
     print_net_power(df_clean)
 
     # --- Plots ---
