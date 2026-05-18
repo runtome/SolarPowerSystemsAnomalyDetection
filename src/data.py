@@ -95,6 +95,28 @@ def create_ae_sequences(data: np.ndarray, input_steps: int):
     return np.array(X)
 
 
+LABEL_DISPLAY = {
+    "HighIrr-LowGen":    "High Irr / Low Gen",
+    "SuddenDrop":        "Sudden Drop",
+    "EfficiencyDecline": "Efficiency Decline",
+    "GenSpike":          "Gen Spike",
+    "Gen-ZeroIrr":       "Gen / Zero Irr",
+}
+
+
+def _print_label_split_counts(label_df: pd.DataFrame, train_idx: int):
+    label_train = label_df.iloc[:train_idx]
+    label_test  = label_df.iloc[train_idx:]
+    for title, subset in [("Train", label_train), ("Test", label_test)]:
+        print(f"\n  {'=' * 60}")
+        print(f"  Anomaly Indicators ({title})")
+        print(f"  {'=' * 60}")
+        for col, display in LABEL_DISPLAY.items():
+            if col in subset.columns:
+                count = int(subset[col].sum())
+                print(f"    {display:30s}: {count:,} samples")
+
+
 class SolarDataModule:
     """Manages all data operations: load, scale, split, create dataloaders."""
 
@@ -120,6 +142,16 @@ class SolarDataModule:
         split_idx = int(len(self.df) * self.data_cfg.train_ratio)
         self.train_df = self.df.iloc[:split_idx]
         self.test_df = self.df.iloc[split_idx:]
+
+        # Anomaly label split counts
+        label_csv = Path(self.data_cfg.cleaned_csv).parent / (
+            Path(self.data_cfg.cleaned_csv).stem + "_Label.csv"
+        )
+        if label_csv.exists():
+            label_df = pd.read_csv(label_csv, index_col=0, parse_dates=True)
+            _print_label_split_counts(label_df, split_idx)
+        else:
+            print("  [skip] Label CSV not found — run EDA first to generate it")
 
         # Scale
         self.train_scaled = self.scaler.fit_transform(self.train_df)

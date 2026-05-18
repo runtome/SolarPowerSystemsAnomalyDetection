@@ -381,6 +381,26 @@ def print_anomaly_indicators(anomalies: dict, title: str = "Visual Inspection"):
         print(f"    {name:30s}: {len(adf):,} samples")
 
 
+LABEL_COLUMNS = {
+    "High Irr / Low Gen": "HighIrr-LowGen",
+    "Sudden Drop":        "SuddenDrop",
+    "Efficiency Decline": "EfficiencyDecline",
+    "Gen Spike":          "GenSpike",
+    "Gen / Zero Irr":     "Gen-ZeroIrr",
+}
+
+
+def save_label_csv(df_clean: pd.DataFrame, anomalies: dict, label_csv_path: Path):
+    """Build boolean label columns from anomaly dicts and save as CSV."""
+    label_df = pd.DataFrame(index=df_clean.index)
+    for category, col_name in LABEL_COLUMNS.items():
+        adf = anomalies.get(category, pd.DataFrame())
+        label_df[col_name] = label_df.index.isin(adf.index)
+    label_df.to_csv(label_csv_path)
+    total = int(label_df.any(axis=1).sum())
+    print(f"  Label CSV saved: {label_csv_path}  ({total:,} labeled rows / {len(label_df):,} total)")
+
+
 def print_net_power(df_clean: pd.DataFrame):
     """Print net power summary."""
     if "generation_kw" in df_clean.columns and "load_kw" in df_clean.columns:
@@ -1038,6 +1058,7 @@ def run_eda(data_dir: str, output_base: str = "outputs") -> tuple:
 
     # --- Zero out no-sun generation (physical constraint) ---
     df_clean = zero_no_sun_generation(df_clean)
+    gen_no_sun = detect_no_sun_generation(df_clean)  # re-detect after zeroing → empty
 
     # --- Statistics ---
     print_statistics(df_clean)
@@ -1046,6 +1067,10 @@ def run_eda(data_dir: str, output_base: str = "outputs") -> tuple:
     # --- Anomaly indicators AFTER cleaning ---
     anomalies = detect_anomaly_categories(df_clean, gen_no_sun)
     print_anomaly_indicators(anomalies, title="After Cleaning")
+
+    label_csv_path = Path(data_dir).parent / f"{Path(data_dir).name}_cleaned_Label.csv"
+    save_label_csv(df_clean, anomalies, label_csv_path)
+
     print_net_power(df_clean)
 
     # --- Plots ---
