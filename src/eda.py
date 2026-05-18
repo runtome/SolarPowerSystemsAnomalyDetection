@@ -37,13 +37,13 @@ def _save(fig, path: Path, dpi: int = 150, site_name: str = ""):
     if site_name:
         sup = fig._suptitle
         if sup is not None and sup.get_text():
-            fig.suptitle(f"{sup.get_text()}\nSite : {site_name}", fontsize=12)
+            fig.suptitle(f"{sup.get_text()} Site Name : {site_name}", fontsize=12)
             fig.subplots_adjust(top=0.90)
         elif len(fig.axes) == 1:
             ax0 = fig.axes[0]
             t = ax0.get_title()
             ax0.set_title("")
-            fig.suptitle(f"{t}\nSite : {site_name}" if t else f"Site : {site_name}",
+            fig.suptitle(f"{t} Site Name : {site_name}" if t else f"Site : {site_name}",
                          fontsize=12)
             fig.subplots_adjust(top=0.88)
         else:
